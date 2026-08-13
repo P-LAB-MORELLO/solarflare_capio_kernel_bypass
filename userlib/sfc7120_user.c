@@ -469,13 +469,22 @@ sfc7120_tx_post(sfc7120_if_t *sfc, const void *buf, size_t len)
         ((uint64_t)((slot_pa >> 32) & 0xffff) << 32) |
         ((uint64_t)(slot_pa & 0xffffffff));
 
-    /* dsb sy orders the packet + descriptor stores before the doorbell kick;
-     * WPTR-only push at slice +8 = 0xa18 (TX_DESC_DBL slice dword index [2]);
-     * then advance tx_head. */
+    /* Full TX push (sfxge ef10_tx_qpush non-TSO path): write the 8-byte
+     * descriptor itself through the doorbell (dwords [0],[1]) followed by
+     * the WPTR (dword [2]). A WPTR-only push forces the NIC to DMA-fetch
+     * the descriptor, and EF10 coalesces those fetches in pairs — a lone
+     * descriptor waits ~40 ms for a partner or a fetch-timeout, which
+     * serialized every other TX (and every ping-pong RTT) at tens of ms.
+     * The descriptor-inline push transmits immediately. */
     uint32_t wptr = (uint32_t)(sfc->tx_head + 1) & (SFC7120_NUM_TX_DESC - 1);
+    uint64_t desc = tx_ring[sfc->tx_head];
+    volatile uint32_t * __capability dbl =
+        (volatile uint32_t * __capability)
+        sfc->mmio_slices[SFC7120_SLICE_TX_DESC_DBL].addr;
     __asm__ volatile("dsb sy" ::: "memory");
-    ((volatile uint32_t * __capability)
-        sfc->mmio_slices[SFC7120_SLICE_TX_DESC_DBL].addr)[2] = wptr;
+    dbl[0] = (uint32_t)(desc & 0xffffffffu);
+    dbl[1] = (uint32_t)(desc >> 32);
+    dbl[2] = wptr;
     sfc->tx_head = (sfc->tx_head + 1) & (SFC7120_NUM_TX_DESC - 1);
 
     return 0;

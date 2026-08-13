@@ -103,6 +103,7 @@ __FBSDID("$FreeBSD$");
 #define MC_CMD_DRV_ATTACH_OUT_LEN         4
 #define MC_CMD_DRV_ATTACH_EXT_OUT_FUNC_FLAGS_OFST 4
 #define MC_CMD_FW_DONT_CARE               0xffffffff
+#define MC_CMD_FW_LOW_LATENCY             0x1
 
 #define MC_CMD_GET_MAC_ADDRESSES          0x55
 #define MC_CMD_GET_MAC_ADDRESSES_OUT_LEN  16
@@ -1026,7 +1027,15 @@ sfc7120_mcdi_drv_attach(sfc7120_softc_t *sc)
      * VI-spreading or sub-variant awareness. */
     new_state = 0x1;
     update    = 0x1;
-    fw_id     = MC_CMD_FW_DONT_CARE;
+    /* Request the plain LOW_LATENCY datapath variant explicitly rather
+     * than FW_DONT_CARE. On this "Precision Time" SKU, DONT_CARE keeps
+     * whatever variant is resident — a PTP-flavored datapath whose
+     * firmware inspects IPv4/UDP ingress (looking for PTP-over-UDP) and
+     * delivers those RX events via the MC's ~92 ms slow path, while raw
+     * EtherType frames fly at 3.5 us over the same wire. DPDK's sfc PMD
+     * makes the same explicit selection, which is why it never saw the
+     * slow path. */
+    fw_id     = MC_CMD_FW_LOW_LATENCY;
     memcpy(&in[MC_CMD_DRV_ATTACH_IN_NEW_STATE_OFST],   &new_state, 4);
     memcpy(&in[MC_CMD_DRV_ATTACH_IN_UPDATE_OFST],      &update,    4);
     memcpy(&in[MC_CMD_DRV_ATTACH_IN_FIRMWARE_ID_OFST], &fw_id,     4);
@@ -1129,9 +1138,14 @@ sfc7120_mcdi_init_evq(sfc7120_softc_t *sc, uint32_t instance,
      * data queue at index 1) is non-interrupting. */
     bool interrupting = (instance == 0);
 
-    uint32_t flags = (1u << 3) | (1u << 4) | (1u << 5);
+    /* Data EVQ (instance != 0): CUT_THRU only — no RX/TX event merging.
+     * With the merge flags set, this fw pairs completion events and holds
+     * a lone event for a ~25-40 ms flush timer, which serializes ping-pong
+     * style workloads at one flush interval per event. Control EVQ 0
+     * keeps the merged config (its latency is irrelevant). */
+    uint32_t flags = (1u << 3);
     if (interrupting)
-        flags |= (1u << 0);
+        flags |= (1u << 0) | (1u << 4) | (1u << 5);
 
     uint8_t buf[MC_CMD_INIT_EVQ_IN_LEN(1)] = {0};
     *(uint32_t *)(buf + MC_CMD_INIT_EVQ_IN_SIZE_OFST)     = nevs;
