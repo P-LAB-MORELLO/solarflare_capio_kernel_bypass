@@ -680,6 +680,18 @@ sfc7120_fbsd_attach(device_t dev)
     SFC7120_WRITE_REG(sc, 0x2400, 0);
     device_printf(dev, "TRACE: EVQ1 RPTR test write (+0x2400) survived\n");
 
+    /* Disable EVQ moderation timers (ER_DZ_EVQ_TMR_REG, 0x420 + i*8192,
+     * mode bits 14:15 = 0 → DIS, value bits 0:13 = 0). The firmware
+     * leaves the per-EVQ timer free-running at its 25.6 ms full-scale
+     * period after INIT_EVQ; every event write to the ring then waits
+     * for the next tick, serializing event delivery at one per ~25.4 ms.
+     * That turned every CAPIO ping-pong RTT into N_events * 25.4 ms.
+     * sfxge zeroes this register via ef10_ev_qmoderate(eep, 0); we do
+     * the equivalent direct write for both EVQs. */
+    SFC7120_WRITE_REG(sc, 0x0420, 0);   /* control EVQ 0 */
+    SFC7120_WRITE_REG(sc, 0x2420, 0);   /* data EVQ 1    */
+    device_printf(dev, "TRACE: EVQ timers disabled (0x420, 0x2420)\n");
+
     /* INITIALIZING RX QUEUE. instance and target_evq are function-local
      * indices (0..vi_count-1); data path targets EVQ 1. */
     device_printf(dev, "TRACE: calling init_rxq\n");
