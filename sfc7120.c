@@ -688,6 +688,14 @@ sfc7120_fbsd_attach(device_t dev)
     SFC7120_WRITE_REG(sc, SFC7120_REG_EVQ_IND(1), 0xC00);  /* data EVQ 1 */
     device_printf(dev, "TRACE: EVQ timers disabled via bug35388 indirect\n");
 
+    /* Belt-and-suspenders: also disable via the firmware API. Register
+     * timer writes are unreliable on some EF10 fw (bug61265); the MCDI
+     * path is authoritative and echoes back the applied values so the
+     * dmesg line proves what the fw actually did. Non-fatal if the fw
+     * predates the command (ENOSYS). */
+    (void)sfc7120_mcdi_set_evq_tmr_dis(sc, 0);
+    (void)sfc7120_mcdi_set_evq_tmr_dis(sc, 1);
+
     /* INITIALIZING RX QUEUE. instance and target_evq are function-local
      * indices (0..vi_count-1); data path targets EVQ 1. */
     device_printf(dev, "TRACE: calling init_rxq\n");

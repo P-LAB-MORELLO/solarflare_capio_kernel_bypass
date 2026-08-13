@@ -99,4 +99,8 @@ int sfc7120_mcdi_get_link(sfc7120_softc_t *sc);
 int sfc7120_mcdi_install_mac_filter(sfc7120_softc_t *sc);
 int sfc7120_mcdi_remove_mac_filter(sfc7120_softc_t *sc);
 
+/* Firmware-authoritative "disable the EVQ moderation timer" (bug61265:
+ * timer register writes are unreliable on some EF10 fw). */
+int sfc7120_mcdi_set_evq_tmr_dis(sfc7120_softc_t *sc, uint32_t instance);
+
 #endif /* SFC7120_MCDI_H */

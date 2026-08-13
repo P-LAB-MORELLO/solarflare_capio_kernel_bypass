@@ -1801,7 +1801,47 @@ sfc7120_mcdi_get_link(sfc7120_softc_t *sc)
     return 0;
 }
 
-/* (Debug hook removed) */
+/* ---------------------------------------------------------------------
+ * MC_CMD_SET_EVQ_TMR (0x120) — firmware-authoritative EVQ timer config.
+ * Exists because EVQ timer REGISTER writes are unreliable on some EF10
+ * silicon/firmware (sfxge bug61265 workaround). Returns the actually
+ * applied load/reload values so we can verify the fw really disabled it.
+ * -------------------------------------------------------------------- */
+#define SFC7120_SET_EVQ_TMR                     0x120
+#define SFC7120_SET_EVQ_TMR_IN_LEN              16
+#define SFC7120_SET_EVQ_TMR_IN_INSTANCE_OFST    0
+#define SFC7120_SET_EVQ_TMR_IN_LOAD_NS_OFST     4
+#define SFC7120_SET_EVQ_TMR_IN_RELOAD_NS_OFST   8
+#define SFC7120_SET_EVQ_TMR_IN_MODE_OFST        12
+#define SFC7120_SET_EVQ_TMR_MODE_DIS            0
+#define SFC7120_SET_EVQ_TMR_OUT_LEN             8
+
+int
+sfc7120_mcdi_set_evq_tmr_dis(sfc7120_softc_t *sc, uint32_t instance)
+{
+    uint8_t buf[SFC7120_SET_EVQ_TMR_IN_LEN] = {0};
+    *(uint32_t *)(buf + SFC7120_SET_EVQ_TMR_IN_INSTANCE_OFST) = instance;
+    /* LOAD/RELOAD 0 ns, MODE_DIS = 0 — all zeros already. */
+
+    uint8_t resp[SFC7120_SET_EVQ_TMR_OUT_LEN] = {0};
+    size_t used = 0;
+    int rc = sfc7120_mcdi_exec(sc, SFC7120_SET_EVQ_TMR,
+                               buf, sizeof(buf), resp, sizeof(resp), &used);
+    if (rc != 0) {
+        device_printf(sc->dev,
+            "MCDI SET_EVQ_TMR(%u, DIS) failed: %d\n", instance, rc);
+        return rc;
+    }
+    uint32_t act_load = 0, act_reload = 0;
+    if (used >= 8) {
+        memcpy(&act_load,   resp + 0, 4);
+        memcpy(&act_reload, resp + 4, 4);
+    }
+    device_printf(sc->dev,
+        "MC SET_EVQ_TMR(%u): mode=DIS applied load=%u ns reload=%u ns\n",
+        instance, act_load, act_reload);
+    return 0;
+}
 
 /* ---------------------------------------------------------------------
  * MC_CMD_FILTER_OP (0x8a) — DST_MAC unicast filter
