@@ -1192,7 +1192,19 @@ sfc7120_mcdi_init_evq(sfc7120_softc_t *sc, uint32_t instance,
      *     command as long as the flag is set; nothing will actually fire
      *     into a vector until we wire up bus_setup_intr later.
      * Bits: INTERRUPTING=0, CUT_THRU=3, RX_MERGE=4, TX_MERGE=5. */
-    uint32_t flags = (1u << 3) | (1u << 4) | (1u << 5);
+    /* Bits: INTERRUPTING=0, CUT_THRU=3, RX_MERGE=4, TX_MERGE=5.
+     *
+     * Control EVQ 0 keeps the merge flags (sfxge's Huntington quirk note:
+     * fw rejects one without the other) — event latency there is
+     * irrelevant. The DATA EVQ (instance != 0) must NOT set the merge
+     * flags: RX/TX event merging holds events back for more traffic with
+     * a flush timer in the tens of ms, which turns a ping-pong workload
+     * (no follow-up traffic until we reply) into a constant ~25-50 ms
+     * round trip. Low-latency datapath = CUT_THRU only, per sfxge
+     * ef10_ev_qcreate's low-latency branch. */
+    uint32_t flags = (1u << 3);
+    if (instance == 0)
+        flags |= (1u << 4) | (1u << 5);
     
     // ARTHUR : this flag apparently tells our NIC to fire an interrupt every time we post an event to this ring
     // this means that a cable being plugged correctly recognizes a CABLE_LINK event, however 
