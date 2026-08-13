@@ -1781,3 +1781,130 @@ sfc7120_mcdi_get_link(sfc7120_softc_t *sc)
         fcntl, mac_fault);
     return 0;
 }
+
+/* ---------------------------------------------------------------------
+ * MC_CMD_FILTER_OP (0x8a) — DST_MAC unicast filter
+ *
+ * Without an explicit DST_MAC filter, EF10 hardware delivers matching
+ * unicast frames via a default "unknown" path that batches events to
+ * userspace at ~85 ms intervals. That kills ping-pong latency (P50 ~50 us
+ * but P75 jumps to ~42 ms). Installing a MATCH_DST_MAC → HOST/RXQ0
+ * SIMPLE filter puts our traffic on the fast path with per-packet event
+ * delivery.
+ *
+ * Field offsets are per ref_efx_regs_mcdi.h (MC_CMD_FILTER_OP_IN_*).
+ * We keep it minimal: only DST_MAC in MATCH_FIELDS; SIMPLE RX mode;
+ * RX_DEST=HOST; RX_QUEUE = function-local instance 0 (matches INIT_RXQ).
+ * --------------------------------------------------------------------- */
+
+/* Use the EXT variant (172 B request), not v1 (108 B). Modern EF10
+ * firmware rejects v1 with EINVAL and expects at least the EXT length
+ * (which includes TX_DEST at offset 40). */
+#define SFC7120_FILTER_OP                        0x8a
+#define SFC7120_FILTER_OP_IN_LEN                 172   /* EXT variant */
+#define SFC7120_FILTER_OP_OUT_LEN                12
+
+#define SFC7120_FILTER_OP_IN_OP_OFST             0
+  #define SFC7120_FILTER_OP_IN_OP_INSERT         0x0
+  #define SFC7120_FILTER_OP_IN_OP_REMOVE         0x1
+#define SFC7120_FILTER_OP_IN_HANDLE_OFST         4    /* 8 bytes */
+#define SFC7120_FILTER_OP_IN_PORT_ID_OFST        12
+#define SFC7120_FILTER_OP_IN_MATCH_FIELDS_OFST   16
+  #define SFC7120_FILTER_MATCH_DST_MAC_BIT       (1u << 4)
+#define SFC7120_FILTER_OP_IN_RX_DEST_OFST        20
+  #define SFC7120_FILTER_OP_IN_RX_DEST_HOST      0x1
+#define SFC7120_FILTER_OP_IN_RX_QUEUE_OFST       24
+#define SFC7120_FILTER_OP_IN_RX_MODE_OFST        28
+  #define SFC7120_FILTER_OP_IN_RX_MODE_SIMPLE    0x0
+#define SFC7120_FILTER_OP_IN_RX_CONTEXT_OFST     32
+#define SFC7120_FILTER_OP_IN_TX_DEST_OFST        40   /* EXT variant only */
+  #define SFC7120_FILTER_OP_IN_TX_DEST_DEFAULT   0xffffffffu
+#define SFC7120_FILTER_OP_IN_DST_MAC_OFST        52    /* 6 bytes */
+
+#define SFC7120_FILTER_OP_OUT_HANDLE_LO_OFST     4
+#define SFC7120_FILTER_OP_OUT_HANDLE_HI_OFST     8
+
+int
+sfc7120_mcdi_install_mac_filter(sfc7120_softc_t *sc)
+{
+    if (sc->mac_filter_installed) {
+        device_printf(sc->dev,
+            "MCDI FILTER_OP INSERT: filter already installed (%#jx), skipping\n",
+            (uintmax_t)sc->mac_filter_handle);
+        return 0;
+    }
+
+    uint8_t buf[SFC7120_FILTER_OP_IN_LEN] = {0};
+    *(uint32_t *)(buf + SFC7120_FILTER_OP_IN_OP_OFST)           = SFC7120_FILTER_OP_IN_OP_INSERT;
+    *(uint32_t *)(buf + SFC7120_FILTER_OP_IN_PORT_ID_OFST)      = EVB_PORT_ID_ASSIGNED;
+    *(uint32_t *)(buf + SFC7120_FILTER_OP_IN_MATCH_FIELDS_OFST) = SFC7120_FILTER_MATCH_DST_MAC_BIT;
+    *(uint32_t *)(buf + SFC7120_FILTER_OP_IN_RX_DEST_OFST)      = SFC7120_FILTER_OP_IN_RX_DEST_HOST;
+    *(uint32_t *)(buf + SFC7120_FILTER_OP_IN_RX_QUEUE_OFST)     = 0;   /* function-local RXQ 0 */
+    *(uint32_t *)(buf + SFC7120_FILTER_OP_IN_RX_MODE_OFST)      = SFC7120_FILTER_OP_IN_RX_MODE_SIMPLE;
+    *(uint32_t *)(buf + SFC7120_FILTER_OP_IN_RX_CONTEXT_OFST)   = 0;
+    *(uint32_t *)(buf + SFC7120_FILTER_OP_IN_TX_DEST_OFST)      = SFC7120_FILTER_OP_IN_TX_DEST_DEFAULT;
+    memcpy(buf + SFC7120_FILTER_OP_IN_DST_MAC_OFST, sc->mac_addr, 6);
+
+    device_printf(sc->dev,
+        "MC FILTER_OP INSERT: DST_MAC=%02x:%02x:%02x:%02x:%02x:%02x -> RX_DEST=HOST RXQ=0\n",
+        sc->mac_addr[0], sc->mac_addr[1], sc->mac_addr[2],
+        sc->mac_addr[3], sc->mac_addr[4], sc->mac_addr[5]);
+
+    uint8_t resp[SFC7120_FILTER_OP_OUT_LEN] = {0};
+    size_t resp_used = 0;
+    int rc = sfc7120_mcdi_exec(sc, SFC7120_FILTER_OP,
+                               buf, SFC7120_FILTER_OP_IN_LEN,
+                               resp, sizeof(resp), &resp_used);
+    if (rc != 0) {
+        device_printf(sc->dev,
+            "MCDI FILTER_OP INSERT failed: %d\n", rc);
+        return rc;
+    }
+    if (resp_used < SFC7120_FILTER_OP_OUT_LEN) {
+        device_printf(sc->dev,
+            "MCDI FILTER_OP INSERT: short response %zu B\n", resp_used);
+        return EIO;
+    }
+
+    uint32_t handle_lo = 0, handle_hi = 0;
+    memcpy(&handle_lo, resp + SFC7120_FILTER_OP_OUT_HANDLE_LO_OFST, 4);
+    memcpy(&handle_hi, resp + SFC7120_FILTER_OP_OUT_HANDLE_HI_OFST, 4);
+    sc->mac_filter_handle    = ((uint64_t)handle_hi << 32) | handle_lo;
+    sc->mac_filter_installed = true;
+
+    device_printf(sc->dev,
+        "MC FILTER_OP INSERT: OK, handle=%#jx\n",
+        (uintmax_t)sc->mac_filter_handle);
+    return 0;
+}
+
+int
+sfc7120_mcdi_remove_mac_filter(sfc7120_softc_t *sc)
+{
+    if (!sc->mac_filter_installed)
+        return 0;
+
+    uint8_t buf[SFC7120_FILTER_OP_IN_LEN] = {0};
+    *(uint32_t *)(buf + SFC7120_FILTER_OP_IN_OP_OFST) = SFC7120_FILTER_OP_IN_OP_REMOVE;
+    uint32_t handle_lo = (uint32_t)(sc->mac_filter_handle);
+    uint32_t handle_hi = (uint32_t)(sc->mac_filter_handle >> 32);
+    memcpy(buf + SFC7120_FILTER_OP_IN_HANDLE_OFST,     &handle_lo, 4);
+    memcpy(buf + SFC7120_FILTER_OP_IN_HANDLE_OFST + 4, &handle_hi, 4);
+
+    int rc = sfc7120_mcdi_exec(sc, SFC7120_FILTER_OP,
+                               buf, SFC7120_FILTER_OP_IN_LEN,
+                               NULL, 0, NULL);
+    if (rc != 0) {
+        device_printf(sc->dev,
+            "MCDI FILTER_OP REMOVE (handle=%#jx) failed: %d\n",
+            (uintmax_t)sc->mac_filter_handle, rc);
+        /* fall through — clear state so a reload can re-insert */
+    } else {
+        device_printf(sc->dev,
+            "MC FILTER_OP REMOVE: OK (handle=%#jx)\n",
+            (uintmax_t)sc->mac_filter_handle);
+    }
+    sc->mac_filter_installed = false;
+    sc->mac_filter_handle    = 0;
+    return rc;
+}

@@ -67,9 +67,14 @@
 #define SFC7120_RX_DESC_SIZE   8        /* 8-byte RX descriptor */
 
 typedef enum {
-    SFC7120_TX_BUFFER,
-    SFC7120_RX_BUFFER,
-    SFC7120_MMIO_REGION,
+    /* Order and count must match sfc7120_vm_map_type_t in
+     * sfc7120_uapi.h — userspace indexes smem by these enum values. */
+    SFC7120_TX_BUFFER,        /* 0 */
+    SFC7120_RX_BUFFER,        /* 1 */
+    SFC7120_MMIO_REGION,      /* 2 */
+    SFC7120_TX_DESC_RING,     /* 3 — TX descriptor ring (4 KB) */
+    SFC7120_RX_DESC_RING,     /* 4 — RX descriptor ring (4 KB) */
+    SFC7120_EVQ_RING,         /* 5 — data EVQ ring (4 KB) */
     SFC7120_REGION_COUNT      /* keep last */
 } sfc7120_vm_map_type_t;
 
@@ -264,13 +269,68 @@ typedef struct sfc7120_softc {
     bool                mac_configured;
     bool                link_configured;
 
+    /* MCDI FILTER_OP handle for the unicast DST_MAC filter installed after
+     * queue init. Zeroed until sfc7120_mcdi_install_mac_filter succeeds;
+     * teardown removes it via MC_CMD_FILTER_OP OP=REMOVE. */
+    uint64_t            mac_filter_handle;
+    bool                mac_filter_installed;
+
+    /* Direct-path (userspace) ring head pointers. Seeded to 0 at attach
+     * (fresh queues after INIT_*) and updated by SFC7120_SET_EVQ_RPTR at
+     * userspace teardown so the next open sees the current NIC state.
+     * Also carry the "kernel pre-posted this many RX descriptors" hint so
+     * userspace's rx_head starts past the pre-post window. */
+    uint32_t            direct_evq_rptr;
+    uint32_t            direct_tx_head;
+    uint32_t            direct_rx_head;
+
     bool                debug_reg_ops;
 } sfc7120_softc_t;
+
+/*
+ * sfc7120_vi_info_req_t — VI geometry handed to userspace for the direct
+ * data path. Layout MUST match sfc7120_uapi.h in the userspace tree.
+ */
+typedef struct sfc7120_vi_info_req {
+    void * __capability user_cap;
+    void * __capability sealed_cap;
+
+    uint64_t tx_buffer_paddr;
+    uint64_t rx_buffer_paddr;
+
+    uint32_t vi_base;
+    uint32_t evq_instance;
+    uint32_t rxq_instance;
+    uint32_t txq_instance;
+
+    uint32_t num_tx_desc;
+    uint32_t num_rx_desc;
+    uint32_t num_evq_entry;
+
+    uint32_t tx_head;
+    uint32_t rx_head;
+    uint32_t evq_read_ptr;
+} sfc7120_vi_info_req_t;
+
+/*
+ * sfc7120_evq_sync_req_t — userspace hands its final data-path pointers
+ * back to the kernel at teardown so the next open sees fresh state.
+ */
+typedef struct sfc7120_evq_sync_req {
+    void * __capability user_cap;
+    void * __capability sealed_cap;
+
+    uint32_t evq_read_ptr;
+    uint32_t tx_head;
+    uint32_t rx_head;
+} sfc7120_evq_sync_req_t;
 
 /* Driver-specific IOCTLs.
  *   'S' picks a non-conflicting group letter (E1000 uses 'E', CAPIO 'C'). */
 #define SFC7120_RX          _IOWR('S', 1, sfc7120_rx_req_t)
 #define SFC7120_TX          _IOWR('S', 2, sfc7120_tx_req_t)
 #define SFC7120_GET_MAC     _IOWR('S', 3, sfc7120_mac_req_t)
+#define SFC7120_GET_VI_INFO _IOWR('S', 4, sfc7120_vi_info_req_t)
+#define SFC7120_SET_EVQ_RPTR _IOWR('S', 5, sfc7120_evq_sync_req_t)
 
 #endif /* SFC7120_POL_H */

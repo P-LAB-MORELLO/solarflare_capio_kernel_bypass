@@ -90,4 +90,13 @@ int sfc7120_mcdi_set_mac(sfc7120_softc_t *sc);
 int sfc7120_mcdi_set_link(sfc7120_softc_t *sc);
 int sfc7120_mcdi_get_link(sfc7120_softc_t *sc);
 
+/* Install a DST_MAC filter routing frames destined to sc->mac_addr to the
+ * primary RXQ (function-local instance 0). Without this, unicast frames go
+ * through a slow default path with ~85 ms batch delivery to the userspace
+ * EVQ, which destroys ping-pong latency measurement. Returns 0 on success;
+ * on success sc->mac_filter_handle holds the firmware handle so teardown can
+ * remove it via MC_CMD_FILTER_OP OP=REMOVE. */
+int sfc7120_mcdi_install_mac_filter(sfc7120_softc_t *sc);
+int sfc7120_mcdi_remove_mac_filter(sfc7120_softc_t *sc);
+
 #endif /* SFC7120_MCDI_H */

@@ -116,6 +116,12 @@ sfc7120_get_buffer_size(void *arg, int type)
         buffer_size = rman_get_size(sc->mem_resource);
         SFC7120_UNLOCK(sc);
         return buffer_size;
+    case SFC7120_TX_DESC_RING:
+        return SFC7120_NUM_TX_DESC * SFC7120_TX_DESC_SIZE;
+    case SFC7120_RX_DESC_RING:
+        return SFC7120_NUM_RX_DESC * SFC7120_RX_DESC_SIZE;
+    case SFC7120_EVQ_RING:
+        return SFC7120_NUM_EVQ_ENTRY * SFC7120_EVQ_ENTRY_SIZE;
     default:
         return 0;
     }
@@ -210,6 +216,68 @@ sfc7120_free_dmabuf(bus_dma_tag_t *dtag, bus_dmamap_t *dmamap,
         bus_dma_tag_destroy(*dtag);
         *dtag = NULL;
     }
+}
+
+/*
+ * sfc7120_post_rx_buffers — seed the RX descriptor ring with (ndescs-1)
+ * descriptors, each pointing at successive RX_BUFFER_SIZE slots of
+ * sc->rx_buffer, then ring the RX doorbell so the NIC starts accepting
+ * frames. We leave the last slot free so the ring index rx_head/rx_tail
+ * can distinguish full-vs-empty.
+ *
+ * EF10 RX descriptor is a 64-bit LE qword:
+ *   bits [ 0:47] BUF_ADDR   — 48-bit DMA target
+ *   bits [48:61] BYTE_CNT   — 14-bit buffer size in bytes
+ *   bits [62:63] reserved
+ *
+ * RX doorbell for function-local RXQ 0 lives at BAR2 offset
+ *   ER_DZ_RX_DESC_UPD_REG + vi_offset
+ *     = 0x0830 + (vi_base + 0) * ER_DZ_RX_DESC_UPD_REG_STEP
+ * with STEP = 8192 on EF10. We write a 32-bit push count (new WPTR).
+ */
+#define SFC7120_RX_DESC_UPD_REG_OFST 0x00000830
+#define SFC7120_RX_DESC_UPD_REG_STEP 8192
+#define SFC7120_EVQ_RPTR_REG_OFST    0x00000400
+#define SFC7120_EVQ_RPTR_REG_STEP    8192
+
+static void
+sfc7120_post_rx_buffers(sfc7120_softc_t *sc)
+{
+    const uint32_t ndescs   = SFC7120_NUM_RX_DESC;
+    const uint32_t nseed    = ndescs - 1;  /* keep one slot free */
+    volatile uint64_t *ring = (volatile uint64_t *)sc->rx_desc_ring;
+
+    for (uint32_t i = 0; i < nseed; i++) {
+        uint64_t buf_paddr = sc->rx_buffer_paddr +
+                             (uint64_t)i * SFC7120_RX_BUFFER_SIZE;
+        uint64_t desc = (buf_paddr & 0x0000ffffffffffffULL) |
+                        (((uint64_t)SFC7120_RX_BUFFER_SIZE & 0x3fff) << 48);
+        ring[i] = desc;
+    }
+
+    /* Make sure descriptors are visible to the NIC's DMA read before
+     * we ring the doorbell. FreeBSD arm64 spelling — wmb() is Linux. */
+    __asm__ volatile("dmb ishst" ::: "memory");
+
+    /* Publish the new producer pointer to the NIC. On EF10, per-VI doorbells
+     * live at register-base + function-local-VI-index * STEP within THIS
+     * function's BAR2. RXQ instance 0 is function-local index 0 → offset 0
+     * from the base (do NOT add vi_base, that's the ABSOLUTE VI number which
+     * only matters in the global VI-space; each function's BAR is fresh). */
+    const uint32_t local_rxq_index = 0;
+    bus_size_t rx_dbl_off = SFC7120_RX_DESC_UPD_REG_OFST +
+                            (bus_size_t)local_rxq_index * SFC7120_RX_DESC_UPD_REG_STEP;
+    SFC7120_WRITE_REG(sc, rx_dbl_off, nseed);
+
+    device_printf(sc->dev,
+        "post_rx_buffers: seeded %u RX descriptors, rang doorbell @ +%#lx (local_rxq=%u vi_base=%u)\n",
+        nseed, (unsigned long)rx_dbl_off, local_rxq_index, sc->vi_base);
+
+    /* Direct-path userspace should start reading right where we left off:
+     * rx_head = nseed (next slot to post), evq_rptr = 0 (fresh EVQ). */
+    sc->direct_rx_head  = nseed;
+    sc->direct_tx_head  = 0;
+    sc->direct_evq_rptr = 0;
 }
 
 static int
@@ -444,6 +512,9 @@ sfc7120_hw_teardown(sfc7120_softc_t *sc)
      * Order matters: FINI_TXQ / FINI_RXQ must complete before FINI_EVQ
      * (firmware returns EBUSY otherwise — RX/TX queues hold a reference to
      * their target EVQ). VADAPTOR_FREE must happen before FREE_VIS. */
+    /* Remove the DST_MAC filter BEFORE tearing down the queue it points at
+     * (fw returns EBUSY otherwise). */
+    (void)sfc7120_mcdi_remove_mac_filter(sc);
     (void)sfc7120_mcdi_fini_txq(sc, 0);
     (void)sfc7120_mcdi_fini_rxq(sc, 0);
     (void)sfc7120_mcdi_fini_evq(sc, 0);
@@ -569,6 +640,25 @@ sfc7120_fbsd_attach(device_t dev)
     }
     device_printf(dev, "TRACE: init_txq done\n");
 
+    /* INSTALL DST_MAC UNICAST FILTER. Puts our RX traffic on the fast
+     * event-delivery path instead of the default ~85 ms slow path. */
+    device_printf(dev, "TRACE: calling install_mac_filter\n");
+    error = sfc7120_mcdi_install_mac_filter(sc);
+    if (error != 0) {
+        device_printf(dev, "install_mac_filter failed: %d (continuing)\n", error);
+        /* non-fatal: unicast still arrives, just slowly */
+        error = 0;
+    } else {
+        device_printf(dev, "TRACE: install_mac_filter done\n");
+    }
+
+    /* Seed the RX ring so the NIC can DMA incoming frames into
+     * sc->rx_buffer slots. Without this, packets sit in the NIC and
+     * userspace never sees an RX_EV. */
+    device_printf(dev, "TRACE: calling post_rx_buffers\n");
+    sfc7120_post_rx_buffers(sc);
+    device_printf(dev, "TRACE: post_rx_buffers done\n");
+
 
     /* 4. Create cdev. make_dev_capio overwrites d_ioctl with
      *    capio_ioctl_handler and registers the modmap callbacks. */
@@ -610,6 +700,32 @@ sfc7120_fbsd_attach(device_t dev)
     sc->smem[SFC7120_MMIO_REGION].is_sliced   = true;
     sc->smem[SFC7120_MMIO_REGION].slice_definitions = sfc7120_reg_slices;
     sc->smem[SFC7120_MMIO_REGION].slice_def_len     = SFC7120_MMIO_SLICE_COUNT;
+
+    /* TX/RX descriptor rings + EVQ ring: DMA-coherent pages. Expose via
+     * their physical addresses (is_physical=true) so modmap builds
+     * VM_MEMATTR_DEVICE mappings, matching the SPDK/DPDK path — direct-VA
+     * mappings would fail MODMAPIOC_MAP because the underlying pages are
+     * bus_dmamem_alloc'd, not malloc'd. */
+    sc->smem[SFC7120_TX_DESC_RING].type        = SFC7120_TX_DESC_RING;
+    sc->smem[SFC7120_TX_DESC_RING].is_physical = true;
+    sc->smem[SFC7120_TX_DESC_RING].paddr       = sc->tx_desc_ring_paddr;
+    sc->smem[SFC7120_TX_DESC_RING].len         =
+        SFC7120_NUM_TX_DESC * SFC7120_TX_DESC_SIZE;
+    sc->smem[SFC7120_TX_DESC_RING].is_sliced   = false;
+
+    sc->smem[SFC7120_RX_DESC_RING].type        = SFC7120_RX_DESC_RING;
+    sc->smem[SFC7120_RX_DESC_RING].is_physical = true;
+    sc->smem[SFC7120_RX_DESC_RING].paddr       = sc->rx_desc_ring_paddr;
+    sc->smem[SFC7120_RX_DESC_RING].len         =
+        SFC7120_NUM_RX_DESC * SFC7120_RX_DESC_SIZE;
+    sc->smem[SFC7120_RX_DESC_RING].is_sliced   = false;
+
+    sc->smem[SFC7120_EVQ_RING].type        = SFC7120_EVQ_RING;
+    sc->smem[SFC7120_EVQ_RING].is_physical = true;
+    sc->smem[SFC7120_EVQ_RING].paddr       = sc->evq_ring_paddr;
+    sc->smem[SFC7120_EVQ_RING].len         =
+        SFC7120_NUM_EVQ_ENTRY * SFC7120_EVQ_ENTRY_SIZE;
+    sc->smem[SFC7120_EVQ_RING].is_sliced   = false;
     device_printf(dev, "TRACE: smem populated\n");
 
     /* 6. init_capio_sc. MUST come AFTER make_dev_capio and AFTER smem[]
@@ -775,6 +891,33 @@ sfc7120_ioctl(struct cdev *dev, u_long cmd, caddr_t data, int flag,
     case SFC7120_RX:
         /* TODO: copyout received packets. */
         return ENOSYS;
+    case SFC7120_GET_VI_INFO: {
+        sfc7120_vi_info_req_t *req = (sfc7120_vi_info_req_t *)data;
+        SFC7120_LOCK(sc);
+        req->tx_buffer_paddr = (uint64_t)sc->tx_buffer_paddr;
+        req->rx_buffer_paddr = (uint64_t)sc->rx_buffer_paddr;
+        req->vi_base         = sc->vi_base;
+        req->evq_instance    = 0;
+        req->rxq_instance    = 0;
+        req->txq_instance    = 0;
+        req->num_tx_desc     = SFC7120_NUM_TX_DESC;
+        req->num_rx_desc     = SFC7120_NUM_RX_DESC;
+        req->num_evq_entry   = SFC7120_NUM_EVQ_ENTRY;
+        req->tx_head         = sc->direct_tx_head;
+        req->rx_head         = sc->direct_rx_head;
+        req->evq_read_ptr    = sc->direct_evq_rptr;
+        SFC7120_UNLOCK(sc);
+        return 0;
+    }
+    case SFC7120_SET_EVQ_RPTR: {
+        sfc7120_evq_sync_req_t *req = (sfc7120_evq_sync_req_t *)data;
+        SFC7120_LOCK(sc);
+        sc->direct_evq_rptr = req->evq_read_ptr;
+        sc->direct_tx_head  = req->tx_head;
+        sc->direct_rx_head  = req->rx_head;
+        SFC7120_UNLOCK(sc);
+        return 0;
+    }
     default:
         return ENOTTY;
     }
