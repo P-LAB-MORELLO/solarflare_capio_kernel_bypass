@@ -249,10 +249,12 @@ static int revoke_cap_token(capio_softc_t* sc, struct thread *td){
 
             error = delete_mapping_from_user(sc, smem.offset, smem.len, td);
             if(!error){
-                // only clear on success because we know the mapping is gone
+                // Only clear the per-user offset. LEN is intrinsic region
+                // geometry populated by the driver at attach time and MUST
+                // survive across user open/close cycles — zeroing it here
+                // breaks every subsequent open with "region has length 0".
                 CAP_LOCK(sc);
                 sc->shared_mem_regs[i].offset = 0;
-                sc->shared_mem_regs[i].len = 0;
                 CAP_UNLOCK(sc);
             }
         }
@@ -380,7 +382,7 @@ static int capio_mmap_single_extra(struct cdev *cdev, vm_ooffset_t *offset, vm_s
                      smem.type, smem.is_sliced, smem.is_physical);
 
             if(smem.is_physical){
-                mem_attributes = VM_MEMATTR_UNCACHEABLE;
+                mem_attributes = VM_MEMATTR_DEVICE;
             }
 
             if(smem.mapped){
@@ -497,7 +499,7 @@ capio_pager_fault(vm_object_t obj, vm_ooffset_t offset, int prot, vm_page_t *mre
         if(smem->type == handle->type){
             if(smem->is_physical){
                 paddr = smem->paddr + offset;
-                mem_attribute = VM_MEMATTR_UNCACHEABLE;
+                mem_attribute = VM_MEMATTR_DEVICE;
                 device_printf(sc->dev, "Mapping physical addr: 0x%lx (base: 0x%lx + offset: 0x%lx)\n", 
                              paddr, smem->paddr, offset);
             }

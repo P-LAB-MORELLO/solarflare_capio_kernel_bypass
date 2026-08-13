@@ -1782,6 +1782,8 @@ sfc7120_mcdi_get_link(sfc7120_softc_t *sc)
     return 0;
 }
 
+/* (Debug hook removed) */
+
 /* ---------------------------------------------------------------------
  * MC_CMD_FILTER_OP (0x8a) — DST_MAC unicast filter
  *
@@ -1839,7 +1841,7 @@ sfc7120_mcdi_install_mac_filter(sfc7120_softc_t *sc)
     *(uint32_t *)(buf + SFC7120_FILTER_OP_IN_PORT_ID_OFST)      = EVB_PORT_ID_ASSIGNED;
     *(uint32_t *)(buf + SFC7120_FILTER_OP_IN_MATCH_FIELDS_OFST) = SFC7120_FILTER_MATCH_DST_MAC_BIT;
     *(uint32_t *)(buf + SFC7120_FILTER_OP_IN_RX_DEST_OFST)      = SFC7120_FILTER_OP_IN_RX_DEST_HOST;
-    *(uint32_t *)(buf + SFC7120_FILTER_OP_IN_RX_QUEUE_OFST)     = 0;   /* function-local RXQ 0 */
+    *(uint32_t *)(buf + SFC7120_FILTER_OP_IN_RX_QUEUE_OFST)     = 0;   /* function-local RXQ 0 — sfxge efs_dmaq_id is er_index (0-based per function) */
     *(uint32_t *)(buf + SFC7120_FILTER_OP_IN_RX_MODE_OFST)      = SFC7120_FILTER_OP_IN_RX_MODE_SIMPLE;
     *(uint32_t *)(buf + SFC7120_FILTER_OP_IN_RX_CONTEXT_OFST)   = 0;
     *(uint32_t *)(buf + SFC7120_FILTER_OP_IN_TX_DEST_OFST)      = SFC7120_FILTER_OP_IN_TX_DEST_DEFAULT;

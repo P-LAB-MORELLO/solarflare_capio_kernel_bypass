@@ -273,9 +273,12 @@ sfc7120_post_rx_buffers(sfc7120_softc_t *sc)
         "post_rx_buffers: seeded %u RX descriptors, rang doorbell @ +%#lx (local_rxq=%u vi_base=%u)\n",
         nseed, (unsigned long)rx_dbl_off, local_rxq_index, sc->vi_base);
 
-    /* Direct-path userspace should start reading right where we left off:
-     * rx_head = nseed (next slot to post), evq_rptr = 0 (fresh EVQ). */
-    sc->direct_rx_head  = nseed;
+    /* Userspace's rx_head is a CONSUMER index — the next slot it will
+     * READ from. The NIC writes into ring[0] first, so consumer starts
+     * at 0. (The producer index is implicit — kernel posted nseed
+     * descriptors and rang the doorbell; userspace re-posts as it
+     * consumes, so it doesn't need to track a separate producer.) */
+    sc->direct_rx_head  = 0;
     sc->direct_tx_head  = 0;
     sc->direct_evq_rptr = 0;
 }
@@ -680,15 +683,15 @@ sfc7120_fbsd_attach(device_t dev)
      *    DMA entries use the kernel virtual address of each allocation.
      *    Order MUST match the sfc7120_vm_map_type_t enum. */
     sc->smem[SFC7120_TX_BUFFER].type        = SFC7120_TX_BUFFER;
-    sc->smem[SFC7120_TX_BUFFER].is_physical = false;
-    sc->smem[SFC7120_TX_BUFFER].addr        = sc->tx_buffer;
+    sc->smem[SFC7120_TX_BUFFER].is_physical = true;
+    sc->smem[SFC7120_TX_BUFFER].paddr       = sc->tx_buffer_paddr;
     sc->smem[SFC7120_TX_BUFFER].len         =
         SFC7120_NUM_TX_DESC * SFC7120_TX_BUFFER_SIZE;
     sc->smem[SFC7120_TX_BUFFER].is_sliced   = false;
 
     sc->smem[SFC7120_RX_BUFFER].type        = SFC7120_RX_BUFFER;
-    sc->smem[SFC7120_RX_BUFFER].is_physical = false;
-    sc->smem[SFC7120_RX_BUFFER].addr        = sc->rx_buffer;
+    sc->smem[SFC7120_RX_BUFFER].is_physical = true;
+    sc->smem[SFC7120_RX_BUFFER].paddr       = sc->rx_buffer_paddr;
     sc->smem[SFC7120_RX_BUFFER].len         =
         SFC7120_NUM_RX_DESC * SFC7120_RX_BUFFER_SIZE;
     sc->smem[SFC7120_RX_BUFFER].is_sliced   = false;
