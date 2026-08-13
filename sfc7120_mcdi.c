@@ -1199,6 +1199,11 @@ sfc7120_mcdi_init_evq(sfc7120_softc_t *sc, uint32_t instance,
     // it also means that incoming packet events trigger interrupts which is botched and will probably cause a race condition 
     // with our user level approach to dumping the data events 
     // TLDR we need to seperate the control event queue from the data event queue so we only scan the control queue for interrupts. 
+    /* EF10 firmware REQUIRES the first EVQ (function-local index 0) to
+     * be INTERRUPTING; INIT_EVQ returns EINVAL otherwise. The kernel ISR
+     * that consumes events for us is neutered separately (see the notes
+     * in sfc7120_interrupt_handler) so events still reach the userspace
+     * poll on this shared EVQ. */
     if (instance == 0)
         flags |= (1u << 0);
 
@@ -1208,8 +1213,10 @@ sfc7120_mcdi_init_evq(sfc7120_softc_t *sc, uint32_t instance,
     *(uint32_t *)(buf + MC_CMD_INIT_EVQ_IN_FLAGS_OFST)    = flags;
     /* IRQ_NUM (offset 24, unioned with TARGET_EVQ): function-relative
      * vector for interrupting EVQs. For index 0 with INTERRUPTING set,
-     * sfxge writes irq=index (i.e. 0); we mirror that. */
-    *(uint32_t *)(buf + MC_CMD_INIT_EVQ_IN_TARGET_EVQ_OFST) = instance;
+     * sfxge writes irq=index (i.e. 0); non-interrupting queues (our data
+     * EVQ 1) also write 0 — the union is only meaningful when the
+     * INTERRUPTING flag is set. */
+    *(uint32_t *)(buf + MC_CMD_INIT_EVQ_IN_TARGET_EVQ_OFST) = 0;
     *(uint64_t *)(buf + MC_CMD_INIT_EVQ_IN_DMA_ADDR_OFST) = paddr;
 
     device_printf(sc->dev,

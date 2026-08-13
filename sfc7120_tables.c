@@ -25,13 +25,20 @@
  * index suffix.
  */
 slice_def_t sfc7120_reg_slices[] = {
-    { SFC7120_REG_MCDB,         "MC_DOORBELL",     false, 4 },
+    /* Order MUST match sfc7120_mmio_slice_idx_t in the userspace uapi:
+     * MC_DOORBELL(0), DATA_EVQ_RPTR_DBL(1), RX_DESC_DBL(2),
+     * TX_DESC_DBL(3), HW_REV_ID(4). */
+    { SFC7120_REG_MCDB,          "MC_DOORBELL",       false, 4 },
     // { SFC7120_REG_MC_EVENT, "MC_EVENT", true, 4 },
     // Not a BAR register — MC events come via the EVQ DMA ring, not MMIO.
-    { SFC7120_REG_EVQ_RPTR_DBL, "EVQ_RPTR_DBL",    false, 4 },
-    { SFC7120_REG_RX_DESC_DBL,  "RX_DESC_DBL",     false, 4 },
-    { SFC7120_REG_TX_DESC_DBL,  "TX_DESC_DBL",     false, 4 },
-    { SFC7120_REG_BIU_HW_REV_ID,"HW_REV_ID",       true,  4 },
+    /* Data EVQ (instance 1) ack — the EVQ userspace actually polls. The
+     * control EVQ 0 doorbell at 0x0400 is intentionally NOT exposed. */
+    { SFC7120_REG_DATA_EVQ_RPTR_DBL, "DATA_EVQ_RPTR_DBL", false, 4 },
+    { SFC7120_REG_RX_DESC_DBL,   "RX_DESC_DBL",       false, 4 },
+    /* 12 B: dword [0] is the qword-push low half, dword [2] (+8) is the
+     * WPTR-only DWORD push the userlib uses (tx_post writes [2]). */
+    { SFC7120_REG_TX_DESC_DBL,   "TX_DESC_DBL",       false, 12 },
+    { SFC7120_REG_BIU_HW_REV_ID, "HW_REV_ID",         true,  4 },
     // { SFC7120_REG_MC_STATUS, "MC_STATUS", true, 4 },
     // Not a BAR register — MC_STATUS is a magic value in the MCDI DMA response buffer.
 };

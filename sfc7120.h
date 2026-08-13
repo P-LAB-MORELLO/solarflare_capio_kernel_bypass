@@ -161,12 +161,21 @@ typedef struct sfc7120_softc {
     void               *irq_handle;
     bool                intr_initialized;
 
-    /* Event queue (EVQ) — DMA buffer of 64-bit events */
+    /* Control event queue (EVQ 0, interrupting) — kernel-owned. Receives
+     * LINKCHANGE / MCDI async events; walked by the ISR. */
     void               *evq_ring;
     bus_addr_t          evq_ring_paddr;
     bus_dma_tag_t       evq_dtag;
     bus_dmamap_t        evq_dmamap;
     int                 evq_read_ptr;
+
+    /* Data event queue (EVQ 1, non-interrupting) — userspace-polled.
+     * RXQ 0 / TXQ 0 target this EVQ; the ring is exposed to userspace as
+     * smem[SFC7120_EVQ_RING] and acked via the 0x2400 RPTR doorbell slice. */
+    void               *data_evq_ring;
+    bus_addr_t          data_evq_ring_paddr;
+    bus_dma_tag_t       data_evq_dtag;
+    bus_dmamap_t        data_evq_dmamap;
 
     /* TX resources */
     void               *tx_desc_ring;

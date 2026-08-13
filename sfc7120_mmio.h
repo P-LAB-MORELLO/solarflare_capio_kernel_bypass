@@ -34,6 +34,10 @@
  * Verified against ER_DZ_EVQ_RPTR_REG_OFST, ER_DZ_RX_DESC_UPD_REG_OFST,
  * and ER_DZ_TX_DESC_UPD_REG_OFST in efx_regs_ef10.h. */
 #define SFC7120_REG_EVQ_RPTR_DBL    0x0400
+/* Data EVQ (function-local instance 1) read-pointer doorbell:
+ * ER_DZ_EVQ_RPTR_REG (0x400) + 1 * STEP (8192) = 0x2400. This is the
+ * slice userspace acks the polled data EVQ through. */
+#define SFC7120_REG_DATA_EVQ_RPTR_DBL 0x2400
 #define SFC7120_REG_RX_DESC_DBL     0x0830
 #define SFC7120_REG_TX_DESC_DBL     0x0a10
 

@@ -257,7 +257,17 @@ sfc7120_post_rx_buffers(sfc7120_softc_t *sc)
 
     /* Make sure descriptors are visible to the NIC's DMA read before
      * we ring the doorbell. FreeBSD arm64 spelling — wmb() is Linux. */
+    bus_dmamap_sync(sc->rx_desc_dtag, sc->rx_desc_dmamap,
+                    BUS_DMASYNC_PREWRITE);
     __asm__ volatile("dmb ishst" ::: "memory");
+
+    /* EF10 hardware requires the RX WPTR to be 8-aligned (see sfxge
+     * ef10_rx_qpush: EFX_P2ALIGN(added, EF10_RX_WPTR_ALIGN=8)). An
+     * unaligned push is ignored by the NIC — which presents as "posted
+     * buffers but zero RX events, forever". Align down: with 511 seeded
+     * we publish 504; the last 7 descriptors sit unpublished until the
+     * consumer re-posts and pushes past them. */
+    const uint32_t wptr = nseed & ~7u;
 
     /* Publish the new producer pointer to the NIC. On EF10, per-VI doorbells
      * live at register-base + function-local-VI-index * STEP within THIS
@@ -267,11 +277,11 @@ sfc7120_post_rx_buffers(sfc7120_softc_t *sc)
     const uint32_t local_rxq_index = 0;
     bus_size_t rx_dbl_off = SFC7120_RX_DESC_UPD_REG_OFST +
                             (bus_size_t)local_rxq_index * SFC7120_RX_DESC_UPD_REG_STEP;
-    SFC7120_WRITE_REG(sc, rx_dbl_off, nseed);
+    SFC7120_WRITE_REG(sc, rx_dbl_off, wptr);
 
     device_printf(sc->dev,
-        "post_rx_buffers: seeded %u RX descriptors, rang doorbell @ +%#lx (local_rxq=%u vi_base=%u)\n",
-        nseed, (unsigned long)rx_dbl_off, local_rxq_index, sc->vi_base);
+        "post_rx_buffers: seeded %u RX descriptors, pushed WPTR=%u @ +%#lx (local_rxq=%u vi_base=%u)\n",
+        nseed, wptr, (unsigned long)rx_dbl_off, local_rxq_index, sc->vi_base);
 
     /* Userspace's rx_head is a CONSUMER index — the next slot it will
      * READ from. The NIC writes into ring[0] first, so consumer starts
@@ -308,13 +318,26 @@ sfc7120_alloc_dma_resources(sfc7120_softc_t *sc)
     memset(sc->evq_ring, 0xff, evq_size);
     bus_dmamap_sync(sc->evq_dtag, sc->evq_dmamap, BUS_DMASYNC_PREWRITE);
 
+    /* Data EVQ ring (instance 1): the NIC posts RX/TX data-path events
+     * here; userspace polls it via the SFC7120_EVQ_RING mmap. Same
+     * geometry and all-ones priming as the control EVQ. */
+    error = sfc7120_alloc_dmabuf(sc->dev,
+                                 &sc->data_evq_dtag, &sc->data_evq_dmamap,
+                                 &sc->data_evq_ring, &sc->data_evq_ring_paddr,
+                                 evq_size, 4096, "data EVQ ring");
+    if (error != 0)
+        goto fail_evq;
+    memset(sc->data_evq_ring, 0xff, evq_size);
+    bus_dmamap_sync(sc->data_evq_dtag, sc->data_evq_dmamap,
+                    BUS_DMASYNC_PREWRITE);
+
     /* TX descriptor ring: driver writes outgoing packet descriptors here. */
     error = sfc7120_alloc_dmabuf(sc->dev,
                                  &sc->tx_desc_dtag, &sc->tx_desc_dmamap,
                                  &sc->tx_desc_ring, &sc->tx_desc_ring_paddr,
                                  txd_size, 4096, "TX desc ring");
     if (error != 0)
-        goto fail_evq;
+        goto fail_devq;
 
     /* RX descriptor ring: driver writes free buffer addresses here. */
     error = sfc7120_alloc_dmabuf(sc->dev,
@@ -351,6 +374,9 @@ fail_rxd:
 fail_txd:
     sfc7120_free_dmabuf(&sc->tx_desc_dtag, &sc->tx_desc_dmamap,
                         &sc->tx_desc_ring, &sc->tx_desc_ring_paddr);
+fail_devq:
+    sfc7120_free_dmabuf(&sc->data_evq_dtag, &sc->data_evq_dmamap,
+                        &sc->data_evq_ring, &sc->data_evq_ring_paddr);
 fail_evq:
     sfc7120_free_dmabuf(&sc->evq_dtag, &sc->evq_dmamap,
                         &sc->evq_ring, &sc->evq_ring_paddr);
@@ -368,6 +394,8 @@ sfc7120_free_dma_resources(sfc7120_softc_t *sc)
                         &sc->rx_desc_ring, &sc->rx_desc_ring_paddr);
     sfc7120_free_dmabuf(&sc->tx_desc_dtag, &sc->tx_desc_dmamap,
                         &sc->tx_desc_ring, &sc->tx_desc_ring_paddr);
+    sfc7120_free_dmabuf(&sc->data_evq_dtag, &sc->data_evq_dmamap,
+                        &sc->data_evq_ring, &sc->data_evq_ring_paddr);
     sfc7120_free_dmabuf(&sc->evq_dtag, &sc->evq_dmamap,
                         &sc->evq_ring, &sc->evq_ring_paddr);
 }
@@ -520,6 +548,7 @@ sfc7120_hw_teardown(sfc7120_softc_t *sc)
     (void)sfc7120_mcdi_remove_mac_filter(sc);
     (void)sfc7120_mcdi_fini_txq(sc, 0);
     (void)sfc7120_mcdi_fini_rxq(sc, 0);
+    (void)sfc7120_mcdi_fini_evq(sc, 1);   /* data EVQ before control EVQ */
     (void)sfc7120_mcdi_fini_evq(sc, 0);
     (void)sfc7120_mcdi_vadaptor_free(sc);
     (void)sfc7120_mcdi_free_vis(sc);
@@ -622,10 +651,32 @@ sfc7120_fbsd_attach(device_t dev)
     }
     device_printf(dev, "TRACE: init_evq done\n");
 
+    /* DATA EVQ (function-local instance 1, non-interrupting). This is the
+     * queue userspace polls: RXQ/TXQ below target it, its ring is exposed
+     * as smem[SFC7120_EVQ_RING], and its RPTR doorbell (BAR2 +0x2400) is
+     * the DATA_EVQ_RPTR_DBL slice. Keeping the interrupting control EVQ 0
+     * separate means the kernel ISR never races userspace for data events
+     * — the exact split the ARTHUR note in init_evq asked for. */
+    device_printf(dev, "TRACE: calling init_evq (data, instance 1)\n");
+    error = sfc7120_mcdi_init_evq(sc, 1, sc->data_evq_ring_paddr,
+                                  SFC7120_NUM_EVQ_ENTRY);
+    if (error != 0) {
+        device_printf(dev, "init_evq(data) failed: %d\n", error);
+        goto fail_dma;
+    }
+    device_printf(dev, "TRACE: init_evq (data) done\n");
+
+    /* Sanity: ack EVQ 1's RPTR doorbell (+0x2400) from the kernel once.
+     * If this write SErrors, the data-EVQ doorbell page indexing is wrong
+     * and userspace would fault the same way. Harmless when correct
+     * (acks an empty queue at rptr 0). */
+    SFC7120_WRITE_REG(sc, 0x2400, 0);
+    device_printf(dev, "TRACE: EVQ1 RPTR test write (+0x2400) survived\n");
+
     /* INITIALIZING RX QUEUE. instance and target_evq are function-local
-     * indices (0..vi_count-1), matching EVQ instance 0 above. */
+     * indices (0..vi_count-1); data path targets EVQ 1. */
     device_printf(dev, "TRACE: calling init_rxq\n");
-    error = sfc7120_mcdi_init_rxq(sc, 0, 0, sc->rx_desc_ring_paddr,
+    error = sfc7120_mcdi_init_rxq(sc, 0, 1, sc->rx_desc_ring_paddr,
                                   SFC7120_NUM_RX_DESC);
     if (error != 0) {
         device_printf(dev, "init_rxq failed: %d\n", error);
@@ -633,9 +684,9 @@ sfc7120_fbsd_attach(device_t dev)
     }
     device_printf(dev, "TRACE: init_rxq done\n");
 
-    /* INITIALIZING TX QUEUE */
+    /* INITIALIZING TX QUEUE — also targeting the data EVQ 1. */
     device_printf(dev, "TRACE: calling init_txq\n");
-    error = sfc7120_mcdi_init_txq(sc, 0, 0, sc->tx_desc_ring_paddr,
+    error = sfc7120_mcdi_init_txq(sc, 0, 1, sc->tx_desc_ring_paddr,
                                   SFC7120_NUM_TX_DESC);
     if (error != 0) {
         device_printf(dev, "init_txq failed: %d\n", error);
@@ -723,9 +774,12 @@ sfc7120_fbsd_attach(device_t dev)
         SFC7120_NUM_RX_DESC * SFC7120_RX_DESC_SIZE;
     sc->smem[SFC7120_RX_DESC_RING].is_sliced   = false;
 
+    /* Expose the DATA EVQ (instance 1) ring — the one RXQ/TXQ post their
+     * events to and userspace polls. The control EVQ 0 ring stays
+     * kernel-private. */
     sc->smem[SFC7120_EVQ_RING].type        = SFC7120_EVQ_RING;
     sc->smem[SFC7120_EVQ_RING].is_physical = true;
-    sc->smem[SFC7120_EVQ_RING].paddr       = sc->evq_ring_paddr;
+    sc->smem[SFC7120_EVQ_RING].paddr       = sc->data_evq_ring_paddr;
     sc->smem[SFC7120_EVQ_RING].len         =
         SFC7120_NUM_EVQ_ENTRY * SFC7120_EVQ_ENTRY_SIZE;
     sc->smem[SFC7120_EVQ_RING].is_sliced   = false;
@@ -900,7 +954,7 @@ sfc7120_ioctl(struct cdev *dev, u_long cmd, caddr_t data, int flag,
         req->tx_buffer_paddr = (uint64_t)sc->tx_buffer_paddr;
         req->rx_buffer_paddr = (uint64_t)sc->rx_buffer_paddr;
         req->vi_base         = sc->vi_base;
-        req->evq_instance    = 0;
+        req->evq_instance    = 1;   /* data EVQ — userspace polls this one */
         req->rxq_instance    = 0;
         req->txq_instance    = 0;
         req->num_tx_desc     = SFC7120_NUM_TX_DESC;
@@ -978,6 +1032,10 @@ sfc7120_interrupt_handler(void *arg)
     int processed = 0;
     bool wake_rx_task = false;
 
+    /* This ISR walks the CONTROL EVQ 0 only (LINKCHANGE, MCDI async).
+     * Data-path RX/TX events go to the non-interrupting data EVQ 1,
+     * which userspace polls directly — so consuming events here never
+     * races the CAPIO userspace driver. */
     if (sc == NULL || sc->evq_ring == NULL)
         return;
     if (sc->dying || !sc->evq_initialized)
