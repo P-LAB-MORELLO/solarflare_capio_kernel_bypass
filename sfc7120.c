@@ -544,12 +544,19 @@ sfc7120_hw_teardown(sfc7120_softc_t *sc)
      * (firmware returns EBUSY otherwise — RX/TX queues hold a reference to
      * their target EVQ). VADAPTOR_FREE must happen before FREE_VIS. */
     /* Remove the DST_MAC filter BEFORE tearing down the queue it points at
-     * (fw returns EBUSY otherwise). */
+     * (fw returns EBUSY otherwise). Log each teardown rc — a silent fini
+     * failure here is the leading suspect for the "INIT_EVQ fails with
+     * MC err 114 until reboot" wedge on the next attach. */
+    int trc;
     (void)sfc7120_mcdi_remove_mac_filter(sc);
-    (void)sfc7120_mcdi_fini_txq(sc, 0);
-    (void)sfc7120_mcdi_fini_rxq(sc, 0);
-    (void)sfc7120_mcdi_fini_evq(sc, 1);   /* data EVQ before control EVQ */
-    (void)sfc7120_mcdi_fini_evq(sc, 0);
+    if ((trc = sfc7120_mcdi_fini_txq(sc, 0)) != 0)
+        device_printf(sc->dev, "teardown: FINI_TXQ(0) rc=%d\n", trc);
+    if ((trc = sfc7120_mcdi_fini_rxq(sc, 0)) != 0)
+        device_printf(sc->dev, "teardown: FINI_RXQ(0) rc=%d\n", trc);
+    if ((trc = sfc7120_mcdi_fini_evq(sc, 1)) != 0)   /* data EVQ first */
+        device_printf(sc->dev, "teardown: FINI_EVQ(1) rc=%d\n", trc);
+    if ((trc = sfc7120_mcdi_fini_evq(sc, 0)) != 0)
+        device_printf(sc->dev, "teardown: FINI_EVQ(0) rc=%d\n", trc);
     (void)sfc7120_mcdi_vadaptor_free(sc);
     (void)sfc7120_mcdi_free_vis(sc);
     (void)sfc7120_mcdi_drv_detach(sc);

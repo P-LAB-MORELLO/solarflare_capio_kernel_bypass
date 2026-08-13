@@ -402,9 +402,14 @@ static int capio_mmap_single_extra(struct cdev *cdev, vm_ooffset_t *offset, vm_s
     handle->sc = sc;
     handle->type = map_req->map_type;
 
-    // create vm object for user
+    // create vm object for user. NOTE: cdev_pager_allocate's size
+    // parameter is in BYTES (it round_page()s and OFF_TO_IDX()s
+    // internally). Passing OFF_TO_IDX(buffer_size) here shrinks the
+    // object to one page, so any fault past the first 4K of a multi-page
+    // region (e.g. an EF10 doorbell at BAR+0x2400) returns
+    // KERN_OUT_OF_BOUNDS -> SIGBUS before the pager ever runs.
 	obj = cdev_pager_allocate(handle, OBJT_DEVICE, &capio_cdev_pager_ops,
-	    OFF_TO_IDX(buffer_size), nprot, *offset, curthread->td_ucred);
+	    buffer_size, nprot, *offset, curthread->td_ucred);
 	if (obj == NULL)
 		return (ENXIO);
 
