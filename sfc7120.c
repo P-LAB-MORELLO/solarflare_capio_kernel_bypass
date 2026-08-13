@@ -673,24 +673,20 @@ sfc7120_fbsd_attach(device_t dev)
     }
     device_printf(dev, "TRACE: init_evq (data) done\n");
 
-    /* Sanity: ack EVQ 1's RPTR doorbell (+0x2400) from the kernel once.
-     * If this write SErrors, the data-EVQ doorbell page indexing is wrong
-     * and userspace would fault the same way. Harmless when correct
-     * (acks an empty queue at rptr 0). */
-    SFC7120_WRITE_REG(sc, 0x2400, 0);
-    device_printf(dev, "TRACE: EVQ1 RPTR test write (+0x2400) survived\n");
-
-    /* Disable EVQ moderation timers (ER_DZ_EVQ_TMR_REG, 0x420 + i*8192,
-     * mode bits 14:15 = 0 → DIS, value bits 0:13 = 0). The firmware
-     * leaves the per-EVQ timer free-running at its 25.6 ms full-scale
-     * period after INIT_EVQ; every event write to the ring then waits
-     * for the next tick, serializing event delivery at one per ~25.4 ms.
-     * That turned every CAPIO ping-pong RTT into N_events * 25.4 ms.
-     * sfxge zeroes this register via ef10_ev_qmoderate(eep, 0); we do
-     * the equivalent direct write for both EVQs. */
-    SFC7120_WRITE_REG(sc, 0x0420, 0);   /* control EVQ 0 */
-    SFC7120_WRITE_REG(sc, 0x2420, 0);   /* data EVQ 1    */
-    device_printf(dev, "TRACE: EVQ timers disabled (0x420, 0x2420)\n");
+    /* Disable EVQ moderation timers. Huntington silicon has bug35388:
+     * direct writes to the DZ EVQ registers (RPTR 0x400, TMR 0x420) are
+     * unsafe/ignored — all EVQ RPTR and timer writes must go through the
+     * per-VI INDIRECT register at 0x0a18 + vi*8192 (== TX_DESC_UPD + 8),
+     * where a flag nibble selects the target:
+     *   bits 10:11 = 3          → timer write; bits 8:9 mode, 0:7 count
+     *   bits  8:11 = 8 / 9      → EVQ RPTR high / low byte
+     * (see sfxge ef10_ev_qmoderate / ef10_ev_qprime bug35388 branches).
+     * Without this, the EVQ timer free-runs at its 25.6 ms full-scale
+     * period and every event write waits for a tick — CAPIO ping-pong
+     * RTTs became N_events * 25.4 ms. Mode DIS + count 0: */
+    SFC7120_WRITE_REG(sc, SFC7120_REG_EVQ_IND(0), 0xC00);  /* control EVQ 0 */
+    SFC7120_WRITE_REG(sc, SFC7120_REG_EVQ_IND(1), 0xC00);  /* data EVQ 1 */
+    device_printf(dev, "TRACE: EVQ timers disabled via bug35388 indirect\n");
 
     /* INITIALIZING RX QUEUE. instance and target_evq are function-local
      * indices (0..vi_count-1); data path targets EVQ 1. */
@@ -1149,8 +1145,17 @@ sfc7120_interrupt_handler(void *arg)
     if (processed > 0) {
         bus_dmamap_sync(sc->evq_dtag, sc->evq_dmamap,
                         BUS_DMASYNC_PREREAD | BUS_DMASYNC_PREWRITE);
-        SFC7120_WRITE_REG(sc, SFC7120_REG_EVQ_RPTR_DBL,
-            (uint32_t)sc->evq_read_ptr & SFC7120_EVQ_RPTR_MASK);
+        /* bug35388: ack via the indirect register — RPTR high byte
+         * (flags=8) then low byte (flags=9). Direct 0x400 writes are
+         * ignored on this silicon. */
+        {
+            uint32_t rptr = (uint32_t)sc->evq_read_ptr &
+                            (SFC7120_NUM_EVQ_ENTRY - 1);
+            SFC7120_WRITE_REG(sc, SFC7120_REG_EVQ_IND(0),
+                (8u << 8) | ((rptr >> 8) & 0xffu));
+            SFC7120_WRITE_REG(sc, SFC7120_REG_EVQ_IND(0),
+                (9u << 8) | (rptr & 0xffu));
+        }
     }
 
     SFC7120_UNLOCK(sc);

@@ -31,9 +31,10 @@ slice_def_t sfc7120_reg_slices[] = {
     { SFC7120_REG_MCDB,          "MC_DOORBELL",       false, 4 },
     // { SFC7120_REG_MC_EVENT, "MC_EVENT", true, 4 },
     // Not a BAR register — MC events come via the EVQ DMA ring, not MMIO.
-    /* Data EVQ (instance 1) ack — the EVQ userspace actually polls. The
-     * control EVQ 0 doorbell at 0x0400 is intentionally NOT exposed. */
-    { SFC7120_REG_DATA_EVQ_RPTR_DBL, "DATA_EVQ_RPTR_DBL", false, 4 },
+    /* Data EVQ (instance 1) ack — bug35388 indirect register for VI 1.
+     * Userspace acks its polled EVQ with the two-write RPTR-high/low
+     * sequence here. The control EVQ 0's registers are NOT exposed. */
+    { SFC7120_REG_DATA_EVQ_IND,  "DATA_EVQ_IND",      false, 4 },
     { SFC7120_REG_RX_DESC_DBL,   "RX_DESC_DBL",       false, 4 },
     /* 12 B: dword [0] is the qword-push low half, dword [2] (+8) is the
      * WPTR-only DWORD push the userlib uses (tx_post writes [2]). */

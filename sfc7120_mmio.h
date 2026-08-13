@@ -34,10 +34,16 @@
  * Verified against ER_DZ_EVQ_RPTR_REG_OFST, ER_DZ_RX_DESC_UPD_REG_OFST,
  * and ER_DZ_TX_DESC_UPD_REG_OFST in efx_regs_ef10.h. */
 #define SFC7120_REG_EVQ_RPTR_DBL    0x0400
-/* Data EVQ (function-local instance 1) read-pointer doorbell:
- * ER_DZ_EVQ_RPTR_REG (0x400) + 1 * STEP (8192) = 0x2400. This is the
- * slice userspace acks the polled data EVQ through. */
-#define SFC7120_REG_DATA_EVQ_RPTR_DBL 0x2400
+/* Huntington bug35388: EVQ RPTR/timer writes must use the per-VI
+ * INDIRECT register at TX_DESC_UPD + 8 (0x0a18) + vi*8192. A flag
+ * nibble in the written value selects the target (8/9 = RPTR high/low
+ * byte, 3 in bits 10:11 = timer). Direct writes to 0x400/0x420 are
+ * the "unsafe EVQ writes" the workaround exists to avoid — the NIC
+ * ignores them. */
+#define SFC7120_REG_EVQ_IND(vi)     (0x0a18 + (bus_size_t)(vi) * 8192)
+/* Slice exposing the DATA EVQ's (function-local VI 1) indirect register
+ * so userspace can ack its polled EVQ. */
+#define SFC7120_REG_DATA_EVQ_IND    0x2a18
 #define SFC7120_REG_RX_DESC_DBL     0x0830
 #define SFC7120_REG_TX_DESC_DBL     0x0a10
 
