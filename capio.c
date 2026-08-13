@@ -382,7 +382,14 @@ static int capio_mmap_single_extra(struct cdev *cdev, vm_ooffset_t *offset, vm_s
                      smem.type, smem.is_sliced, smem.is_physical);
 
             if(smem.is_physical){
-                mem_attributes = VM_MEMATTR_DEVICE;
+                /* Sliced physical regions are MMIO register files → Device
+                 * memory (no speculation/reordering against the NIC).
+                 * Unsliced physical regions are DMA rings/buffers → Normal
+                 * non-cacheable: coherent with NIC DMA on this platform,
+                 * and unlike Device memory it permits the unaligned
+                 * accesses memcpy generates. */
+                mem_attributes = smem.is_sliced ?
+                    VM_MEMATTR_DEVICE : VM_MEMATTR_UNCACHEABLE;
             }
 
             if(smem.mapped){
@@ -504,8 +511,12 @@ capio_pager_fault(vm_object_t obj, vm_ooffset_t offset, int prot, vm_page_t *mre
         if(smem->type == handle->type){
             if(smem->is_physical){
                 paddr = smem->paddr + offset;
-                mem_attribute = VM_MEMATTR_DEVICE;
-                device_printf(sc->dev, "Mapping physical addr: 0x%lx (base: 0x%lx + offset: 0x%lx)\n", 
+                /* Same discrimination as the mmap path: registers (sliced)
+                 * get Device memory; DMA rings/buffers (unsliced) get
+                 * Normal non-cacheable so unaligned memcpy works. */
+                mem_attribute = smem->is_sliced ?
+                    VM_MEMATTR_DEVICE : VM_MEMATTR_UNCACHEABLE;
+                device_printf(sc->dev, "Mapping physical addr: 0x%lx (base: 0x%lx + offset: 0x%lx)\n",
                              paddr, smem->paddr, offset);
             }
             else{
