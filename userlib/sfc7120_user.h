@@ -104,6 +104,10 @@ int  sfc7120_poll(sfc7120_if_t *sfc, sfc7120_ev_t *evs, int max_evs);
  * EVQ reader. tx_post returns immediately (completion arrives as a poll TX_EV);
  * rx_recv reads + recycles the current slot on a poll RX_EV (no EVQ access). */
 int  sfc7120_tx_post(sfc7120_if_t *sfc, const void *buf, size_t len);
+int  sfc7120_tx_post_paddr(sfc7120_if_t *sfc, uint64_t paddr, size_t len);
+int  sfc7120_rx_peek(sfc7120_if_t *sfc, void **pkt_out, size_t *len_out,
+                     uint64_t *paddr_out, uint16_t rx_bytes);
+int  sfc7120_rx_release(sfc7120_if_t *sfc);
 int  sfc7120_rx_recv(sfc7120_if_t *sfc, void *buf, size_t *len_out,
                      uint16_t rx_bytes);
 

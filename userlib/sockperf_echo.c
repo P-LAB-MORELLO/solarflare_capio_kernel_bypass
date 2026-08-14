@@ -300,31 +300,38 @@ main(int argc, char **argv)
             }
             if (evs[j].type != SFC7120_EV_RX)
                 continue;
-            size_t len = sizeof(buf);
-            if (sfc7120_rx_recv(&sfc, buf, &len, evs[j].rx_bytes) != 0)
+            size_t   len = 0;
+            uint8_t *pkt = NULL;
+            uint64_t pa  = 0;
+            /* Zero-copy: work directly in the RX DMA slot and transmit from
+             * it, matching DPDK's rte_pktmbuf_mtod path. The descriptor is
+             * handed back via sfc7120_rx_release() on EVERY exit path below —
+             * miss one and the RX ring starves. */
+            if (sfc7120_rx_peek(&sfc, (void **)&pkt, &len, &pa,
+                                evs[j].rx_bytes) != 0)
                 continue;
             rx++;
 
-            if (len < MIN_FRAME_LEN) { ignored++; continue; }
-            struct eth_hdr *eth = (struct eth_hdr *)buf;
-            if (ntohs(eth->type) != 0x0800) { ignored++; continue; }
+            if (len < MIN_FRAME_LEN) { ignored++; sfc7120_rx_release(&sfc); continue; }
+            struct eth_hdr *eth = (struct eth_hdr *)pkt;
+            if (ntohs(eth->type) != 0x0800) { ignored++; sfc7120_rx_release(&sfc); continue; }
 
-            struct ip_hdr *ip = (struct ip_hdr *)(buf + ETH_HDR_LEN);
+            struct ip_hdr *ip = (struct ip_hdr *)(pkt + ETH_HDR_LEN);
             uint8_t ip_hlen = (ip->vhl & 0x0f) * 4;
-            if (ip_hlen < IP_HDR_LEN) { ignored++; continue; }
-            if (ip->proto != 17)      { ignored++; continue; }
+            if (ip_hlen < IP_HDR_LEN) { ignored++; sfc7120_rx_release(&sfc); continue; }
+            if (ip->proto != 17)      { ignored++; sfc7120_rx_release(&sfc); continue; }
             if (len < (size_t)ETH_HDR_LEN + ip_hlen + UDP_HDR_LEN + SPF_HDR_LEN) {
-                ignored++; continue;
+                ignored++; sfc7120_rx_release(&sfc); continue;
             }
 
-            struct udp_hdr *udp = (struct udp_hdr *)(buf + ETH_HDR_LEN + ip_hlen);
+            struct udp_hdr *udp = (struct udp_hdr *)(pkt + ETH_HDR_LEN + ip_hlen);
             struct spf_msg_hdr *msg =
                 (struct spf_msg_hdr *)((uint8_t *)udp + UDP_HDR_LEN);
 
             uint16_t flags = ntohs(msg->flags);
-            if (!(flags & SPF_MASK_CLIENT))     { ignored++; continue; }
-            if (flags & SPF_MASK_WARMUP_MSG)    { ignored++; continue; }
-            if (!(flags & SPF_MASK_PONG))       { ignored++; continue; }
+            if (!(flags & SPF_MASK_CLIENT))     { ignored++; sfc7120_rx_release(&sfc); continue; }
+            if (flags & SPF_MASK_WARMUP_MSG)    { ignored++; sfc7120_rx_release(&sfc); continue; }
+            if (!(flags & SPF_MASK_PONG))       { ignored++; sfc7120_rx_release(&sfc); continue; }
 
             /* Turn into a server response */
             flags &= ~SPF_MASK_CLIENT;
@@ -349,7 +356,7 @@ main(int argc, char **argv)
             udp->dst_port = tmp_port;
             udp->checksum = 0;
 
-            if (sfc7120_tx_post(&sfc, buf, len) == 0) {
+            if (sfc7120_tx_post_paddr(&sfc, pa, len) == 0) {
                 echoed++;
                 /* Companion frame: this firmware appears to flush event-queue
                  * writes in pairs, so a lone TX completion waits ~43 ms for a
@@ -366,6 +373,9 @@ main(int argc, char **argv)
                 }
             } else
                 ignored++;
+
+            /* TX is posted (or failed); the slot can go back to the NIC. */
+            sfc7120_rx_release(&sfc);
 
             if (1) {
                 struct timespec _rt;

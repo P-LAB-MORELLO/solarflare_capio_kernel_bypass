@@ -391,6 +391,117 @@ sfc7120_poll(sfc7120_if_t *sfc, sfc7120_ev_t *evs, int max_evs)
 }
 
 /*
+ * sfc7120_rx_peek — zero-copy RX. Hands back a pointer to the packet *inside*
+ * the RX DMA slot plus that slot's bus address, so the caller can rewrite
+ * headers in place and transmit the same buffer. Does NOT copy and does NOT
+ * re-post the descriptor; call sfc7120_rx_release() once the TX is posted.
+ *
+ * Pairs with sfc7120_tx_post_paddr() to match DPDK's rte_pktmbuf_mtod path,
+ * which swaps headers in the received mbuf and transmits it without touching
+ * the payload. The previous rx_recv/tx_post pair copied the payload twice
+ * (RX slot -> user buffer -> TX slot); DPDK copied zero times, so the two echo
+ * servers were not doing equal work.
+ */
+int
+sfc7120_rx_peek(sfc7120_if_t *sfc, void **pkt_out, size_t *len_out,
+                uint64_t *paddr_out, uint16_t rx_bytes)
+{
+    if (sfc == NULL || pkt_out == NULL)
+        return -1;
+    if (sfc->rx_buffer == NULL || sfc->rx_desc_ring == NULL ||
+        sfc->mmio_slices == NULL ||
+        sfc->mmio_slices_len <= SFC7120_SLICE_RX_DESC_DBL)
+        return -1;
+
+    sfc->used_poll = true;
+
+    uint8_t *rxbuf = (uint8_t *)sfc->rx_buffer;
+    uint8_t *slot  = rxbuf + (size_t)sfc->rx_head * SFC7120_RX_BUFFER_SIZE;
+    uint16_t plen  = (uint16_t)slot[8] | ((uint16_t)slot[9] << 8);
+    if (plen == 0)
+        plen = (rx_bytes > SFC7120_EF10_RX_PREFIX_LEN)
+               ? (uint16_t)(rx_bytes - SFC7120_EF10_RX_PREFIX_LEN) : 0;
+
+    *pkt_out = slot + SFC7120_EF10_RX_PREFIX_LEN;
+    if (len_out != NULL)
+        *len_out = plen;
+    if (paddr_out != NULL)
+        *paddr_out = sfc->vi_info.rx_buffer_paddr +
+                     (uint64_t)sfc->rx_head * SFC7120_RX_BUFFER_SIZE +
+                     SFC7120_EF10_RX_PREFIX_LEN;
+    return 0;
+}
+
+/*
+ * sfc7120_rx_release — re-post the current RX slot and advance rx_head. This
+ * is the tail of sfc7120_rx_recv() lifted out verbatim, including the doorbell
+ * convention; it is called after the TX is posted rather than before.
+ *
+ * Safe to call immediately after posting a TX that reads from this same slot:
+ * the NIC fills RX slots sequentially, so it must write the other 511 before
+ * returning to this one -- milliseconds at line rate, against microseconds for
+ * a TX DMA.
+ */
+int
+sfc7120_rx_release(sfc7120_if_t *sfc)
+{
+    if (sfc == NULL || sfc->rx_desc_ring == NULL || sfc->mmio_slices == NULL ||
+        sfc->mmio_slices_len <= SFC7120_SLICE_RX_DESC_DBL)
+        return -1;
+
+    volatile uint64_t *rx_ring = (volatile uint64_t *)sfc->rx_desc_ring;
+    uint64_t slot_pa = sfc->vi_info.rx_buffer_paddr +
+                       (uint64_t)sfc->rx_head * SFC7120_RX_BUFFER_SIZE;
+    rx_ring[sfc->rx_head] =
+        ((uint64_t)(SFC7120_RX_BUFFER_SIZE & 0x3fff) << 48) |
+        ((uint64_t)((slot_pa >> 32) & 0xffff)         << 32) |
+        ((uint64_t)(slot_pa & 0xffffffff));
+
+    __asm__ volatile("dsb sy" ::: "memory");
+    sfc->rx_head = (sfc->rx_head + 1) & (SFC7120_NUM_RX_DESC - 1);
+    *(volatile uint32_t * __capability)
+        sfc->mmio_slices[SFC7120_SLICE_RX_DESC_DBL].addr = sfc->rx_head;
+    return 0;
+}
+
+/*
+ * sfc7120_tx_post_paddr — sfc7120_tx_post() with the payload copy removed and
+ * the descriptor built from a caller-supplied bus address. Doorbell sequence
+ * is identical (descriptor-inline push, then WPTR).
+ */
+int
+sfc7120_tx_post_paddr(sfc7120_if_t *sfc, uint64_t paddr, size_t len)
+{
+    if (sfc == NULL)
+        return -1;
+    if (sfc->tx_desc_ring == NULL || sfc->mmio_slices == NULL ||
+        sfc->mmio_slices_len <= SFC7120_SLICE_TX_DESC_DBL)
+        return -1;
+    if (len == 0 || len > SFC7120_TX_BUFFER_SIZE)
+        return -1;
+
+    sfc->used_poll = true;
+
+    volatile uint64_t *tx_ring = (volatile uint64_t *)sfc->tx_desc_ring;
+    tx_ring[sfc->tx_head] =
+        ((uint64_t)(len & 0x3fff)            << 48) |
+        ((uint64_t)((paddr >> 32) & 0xffff)  << 32) |
+        ((uint64_t)(paddr & 0xffffffff));
+
+    uint32_t wptr = (uint32_t)(sfc->tx_head + 1) & (SFC7120_NUM_TX_DESC - 1);
+    uint64_t desc = tx_ring[sfc->tx_head];
+    volatile uint32_t * __capability dbl =
+        (volatile uint32_t * __capability)
+        sfc->mmio_slices[SFC7120_SLICE_TX_DESC_DBL].addr;
+    __asm__ volatile("dsb sy" ::: "memory");
+    dbl[0] = (uint32_t)(desc & 0xffffffffu);
+    dbl[1] = (uint32_t)(desc >> 32);
+    dbl[2] = wptr;
+    sfc->tx_head = (sfc->tx_head + 1) & (SFC7120_NUM_TX_DESC - 1);
+    return 0;
+}
+
+/*
  * sfc7120_rx_recv — read + recycle one received packet (Phase F). Called by
  * the application *after* sfc7120_poll reports an RX_EV; it does NOT touch the
  * data EVQ (poll already consumed and acked that event). It reads the current
