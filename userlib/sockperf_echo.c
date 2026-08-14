@@ -167,46 +167,92 @@ main(int argc, char **argv)
             int pace_us = atoi(getenv("SFC_RTT_BENCH"));
             enum { NSAMP = 2000 };
             static double rtts[NSAMP];
-            int got = 0;
+            int got = 0, lost = 0;
             sfc7120_ev_t bevs[8];
+            uint8_t bbuf[2048];
+
             for (int it = 0; it < NSAMP; it++) {
                 struct timespec t0, t1;
+
+                /* 1. Drain every pending event so nothing stale can be
+                 *    mistaken for this iteration reply. */
+                for (;;) {
+                    int dn = sfc7120_poll(&sfc, bevs, 8);
+                    if (dn <= 0) break;
+                    for (int k = 0; k < dn; k++) {
+                        if (bevs[k].type == SFC7120_EV_RX) {
+                            size_t bl = sizeof(bbuf);
+                            (void)sfc7120_rx_recv(&sfc, bbuf, &bl,
+                                                  bevs[k].rx_bytes);
+                        }
+                    }
+                }
+
+                /* 2. Stamp a unique sequence number into the probe. */
+                uint64_t seq = (uint64_t)it + 1;
+                uint8_t *m = &probe[42];
+                for (int b = 0; b < 8; b++)
+                    m[b] = (uint8_t)(seq >> (56 - 8 * b));
+
                 clock_gettime(CLOCK_MONOTONIC, &t0);
-                sfc7120_tx_post(&sfc, probe, sizeof(probe));
+                if (sfc7120_tx_post(&sfc, probe, sizeof(probe)) != 0) {
+                    lost++;
+                    continue;
+                }
+
+                /* 3. Accept only a server reply carrying OUR sequence:
+                 *    CLIENT bit clear, seq matches. */
                 int done = 0;
-                while (!done) {
-                    int bn = sfc7120_poll(&sfc, bevs, 8);
-                    for (int k = 0; k < bn; k++) {
+                for (;;) {
+                    int dn = sfc7120_poll(&sfc, bevs, 8);
+                    for (int k = 0; k < dn && !done; k++) {
                         if (bevs[k].type != SFC7120_EV_RX) continue;
-                        size_t blen = 2048;
-                        uint8_t bbuf[2048];
-                        if (sfc7120_rx_recv(&sfc, bbuf, &blen, bevs[k].rx_bytes) == 0)
+                        size_t bl = sizeof(bbuf);
+                        if (sfc7120_rx_recv(&sfc, bbuf, &bl,
+                                            bevs[k].rx_bytes) != 0)
+                            continue;
+                        if (bl < 56) continue;
+                        uint8_t *rm = &bbuf[42];
+                        uint64_t rseq = 0;
+                        for (int b = 0; b < 8; b++)
+                            rseq = (rseq << 8) | rm[b];
+                        uint16_t rfl = ((uint16_t)rm[8] << 8) | rm[9];
+                        if (rseq == seq && !(rfl & 0x1))
                             done = 1;
                     }
                     clock_gettime(CLOCK_MONOTONIC, &t1);
-                    if ((t1.tv_sec - t0.tv_sec) * 1e9 + (t1.tv_nsec - t0.tv_nsec) > 3e9)
-                        break; /* 3 s timeout: count as lost */
+                    double el = (t1.tv_sec - t0.tv_sec) * 1e6 +
+                                (t1.tv_nsec - t0.tv_nsec) / 1e3;
+                    if (done || el > 500000.0) break;   /* 500 ms cap */
                 }
                 clock_gettime(CLOCK_MONOTONIC, &t1);
-                if (done) {
+                if (done)
                     rtts[got++] = (t1.tv_sec - t0.tv_sec) * 1e6 +
                                   (t1.tv_nsec - t0.tv_nsec) / 1e3;
-                }
+                else
+                    lost++;
                 if (pace_us > 0) usleep(pace_us);
             }
-            /* sort + percentiles */
+
             for (int a = 1; a < got; a++) {
                 double v = rtts[a]; int b = a - 1;
                 while (b >= 0 && rtts[b] > v) { rtts[b+1] = rtts[b]; b--; }
                 rtts[b+1] = v;
             }
+            int fast = 0, slow = 0;
+            for (int a = 0; a < got; a++) {
+                if (rtts[a] < 100.0) fast++; else slow++;
+            }
             if (got > 0)
                 fprintf(stderr,
-                    "RTTBENCH pace_us=%d n=%d min=%.1f p50=%.1f p99=%.1f max=%.1f us\n",
-                    pace_us, got, rtts[0], rtts[got/2],
-                    rtts[(int)(got*0.99)], rtts[got-1]);
+                    "RTTBENCH pace=%d n=%d lost=%d fast(<100us)=%d slow=%d "
+                    "min=%.1f p25=%.1f p50=%.1f p60=%.1f p75=%.1f p90=%.1f max=%.1f us\n",
+                    pace_us, got, lost, fast, slow, rtts[0],
+                    rtts[(int)(got*0.25)], rtts[got/2], rtts[(int)(got*0.60)],
+                    rtts[(int)(got*0.75)], rtts[(int)(got*0.90)], rtts[got-1]);
             else
-                fprintf(stderr, "RTTBENCH pace_us=%d n=0 (all lost)\n", pace_us);
+                fprintf(stderr, "RTTBENCH pace=%d n=0 lost=%d\n",
+                        pace_us, lost);
             fflush(stderr);
             sfc7120_destroy(&sfc);
             return 0;
@@ -215,6 +261,7 @@ main(int argc, char **argv)
 
     uint8_t buf[2048];
     sfc7120_ev_t evs[8];
+    const int ev_dbg = (getenv("SFC_EV_DBG") != NULL);
     uint64_t rx = 0, echoed = 0, ignored = 0;
 
     /* Companion-event keepalive: this firmware coalesces event writes in
@@ -233,15 +280,6 @@ main(int argc, char **argv)
 
     time_t _lts = 0;
     while (!g_stop) {
-        struct timespec ka_now;
-        clock_gettime(CLOCK_MONOTONIC, &ka_now);
-        long ka_ns = (ka_now.tv_sec - ka_last.tv_sec) * 1000000000L +
-                     (ka_now.tv_nsec - ka_last.tv_nsec);
-        if (ka_ns > 50000) {            /* 50 us */
-            sfc7120_tx_post(&sfc, keepalive, sizeof(keepalive));
-            ka_last = ka_now;
-        }
-
         int n = sfc7120_poll(&sfc, evs, 8);
         if (n < 0) {
             fprintf(stderr, "poll error\n");
@@ -251,12 +289,12 @@ main(int argc, char **argv)
             if (evs[j].type == SFC7120_EV_TX) {
                 struct timespec _t;
                 clock_gettime(CLOCK_MONOTONIC, &_t);
-                fprintf(stderr, "TX_EV seen mono=%lld.%06ld\n",
+                if (ev_dbg) fprintf(stderr, "TX_EV seen mono=%lld.%06ld\n",
                     (long long)_t.tv_sec, _t.tv_nsec / 1000);
                 fflush(stderr);
             }
             if (evs[j].type == SFC7120_EV_RX) {
-                fprintf(stderr, "RX_EV raw=%016llx\n",
+                if (ev_dbg) fprintf(stderr, "RX_EV raw=%016llx\n",
                     (unsigned long long)evs[j].raw);
                 fflush(stderr);
             }
@@ -311,9 +349,22 @@ main(int argc, char **argv)
             udp->dst_port = tmp_port;
             udp->checksum = 0;
 
-            if (sfc7120_tx_post(&sfc, buf, len) == 0)
+            if (sfc7120_tx_post(&sfc, buf, len) == 0) {
                 echoed++;
-            else
+                /* Companion frame: this firmware appears to flush event-queue
+                 * writes in pairs, so a lone TX completion waits ~43 ms for a
+                 * partner. Emitting a second, throwaway frame immediately
+                 * gives it one. Addressed to our own MAC so the peer drops
+                 * it. Gated by SFC_PAIR_TX so the effect can be measured. */
+                if (getenv("SFC_PAIR_TX") != NULL) {
+                    uint8_t pad[60];
+                    memset(pad, 0, sizeof(pad));
+                    memcpy(&pad[0], sfc.mac_addr, 6);
+                    memcpy(&pad[6], sfc.mac_addr, 6);
+                    pad[12] = 0x88; pad[13] = 0xB5;
+                    (void)sfc7120_tx_post(&sfc, pad, sizeof(pad));
+                }
+            } else
                 ignored++;
 
             if (1) {

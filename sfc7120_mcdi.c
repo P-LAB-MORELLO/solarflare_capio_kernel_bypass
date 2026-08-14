@@ -1143,9 +1143,12 @@ sfc7120_mcdi_init_evq(sfc7120_softc_t *sc, uint32_t instance,
      * a lone event for a ~25-40 ms flush timer, which serializes ping-pong
      * style workloads at one flush interval per event. Control EVQ 0
      * keeps the merged config (its latency is irrelevant). */
-    uint32_t flags = (1u << 3);
+    uint32_t flags = (1u << 3) | (1u << 4) | (1u << 5);
     if (interrupting)
         flags |= (1u << 0) | (1u << 4) | (1u << 5);
+
+    device_printf(sc->dev, "INIT_EVQ instance=%u flags=%#x nevs=%zu\n",
+                  instance, flags, (size_t)nevs);
 
     uint8_t buf[MC_CMD_INIT_EVQ_IN_LEN(1)] = {0};
     *(uint32_t *)(buf + MC_CMD_INIT_EVQ_IN_SIZE_OFST)     = nevs;
@@ -1885,4 +1888,55 @@ sfc7120_mcdi_filter_remove(sfc7120_softc_t *sc)
     }
     sc->rx_filter_inserted = false;
     return rc;
+}
+
+/* ---------------------------------------------------------------------
+ * MC_CMD_MAC_STATS (0x2e) — DMA the NIC MAC counters and log the RX ones.
+ * Diagnostic: separates "the NIC never received the frame" from "the frame
+ * arrived but the event never reached userspace".
+ * -------------------------------------------------------------------- */
+#define SFC7120_MAC_STATS               0x2e
+#define SFC7120_MAC_STATS_IN_LEN        20
+#define SFC7120_MAC_STATS_IN_DMA_ADDR   0
+#define SFC7120_MAC_STATS_IN_CMD        8
+#define SFC7120_MAC_STATS_IN_DMA_LEN    12
+#define SFC7120_MAC_STATS_IN_PORT_ID    16
+#define SFC7120_MAC_STATS_DMA_BIT       (1u << 0)
+#define SFC7120_MAC_NSTATS              0x61
+#define SFC7120_MAC_RX_PKTS             0x1c
+#define SFC7120_MAC_RX_GOOD_PKTS        0x1e
+#define SFC7120_MAC_RX_NODESC_DROPS     0x36
+#define SFC7120_MAC_RX_MATCH_FAULT      0x3b
+
+int
+sfc7120_mcdi_mac_stats(sfc7120_softc_t *sc)
+{
+    if (sc->stats_buf == NULL)
+        return ENXIO;
+
+    uint8_t buf[SFC7120_MAC_STATS_IN_LEN] = {0};
+    *(uint64_t *)(buf + SFC7120_MAC_STATS_IN_DMA_ADDR) =
+        (uint64_t)sc->stats_paddr;
+    *(uint32_t *)(buf + SFC7120_MAC_STATS_IN_CMD)      =
+        SFC7120_MAC_STATS_DMA_BIT;
+    *(uint32_t *)(buf + SFC7120_MAC_STATS_IN_DMA_LEN)  =
+        SFC7120_MAC_NSTATS * 8;
+    *(uint32_t *)(buf + SFC7120_MAC_STATS_IN_PORT_ID)  = EVB_PORT_ID_ASSIGNED;
+
+    int rc = sfc7120_mcdi_exec(sc, SFC7120_MAC_STATS, buf, sizeof(buf),
+                               NULL, 0, NULL);
+    if (rc != 0) {
+        device_printf(sc->dev, "MCDI MAC_STATS failed: %d\n", rc);
+        return rc;
+    }
+
+    bus_dmamap_sync(sc->stats_dtag, sc->stats_dmamap, BUS_DMASYNC_POSTREAD);
+    const uint64_t *v = (const uint64_t *)sc->stats_buf;
+    device_printf(sc->dev,
+        "MAC_STATS: rx_pkts=%ju rx_good=%ju nodesc_drops=%ju match_fault=%ju\n",
+        (uintmax_t)v[SFC7120_MAC_RX_PKTS],
+        (uintmax_t)v[SFC7120_MAC_RX_GOOD_PKTS],
+        (uintmax_t)v[SFC7120_MAC_RX_NODESC_DROPS],
+        (uintmax_t)v[SFC7120_MAC_RX_MATCH_FAULT]);
+    return 0;
 }

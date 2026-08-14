@@ -96,4 +96,6 @@ int sfc7120_mcdi_get_link(sfc7120_softc_t *sc);
 int sfc7120_mcdi_filter_insert(sfc7120_softc_t *sc);
 int sfc7120_mcdi_filter_remove(sfc7120_softc_t *sc);
 
+int sfc7120_mcdi_mac_stats(sfc7120_softc_t *sc);
+
 #endif /* SFC7120_MCDI_H */

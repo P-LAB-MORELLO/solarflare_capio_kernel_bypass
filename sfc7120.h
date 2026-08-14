@@ -219,6 +219,12 @@ typedef struct sfc7120_softc {
     uint64_t            rx_filter_handle;
     bool                rx_filter_inserted;
 
+    /* MC_CMD_MAC_STATS DMA target (diagnostic): 97 uint64 counters. */
+    void               *stats_buf;
+    bus_addr_t          stats_paddr;
+    bus_dma_tag_t       stats_dtag;
+    bus_dmamap_t        stats_dmamap;
+
     bool                debug_reg_ops;
 } sfc7120_softc_t;
 

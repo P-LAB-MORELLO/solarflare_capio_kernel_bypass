@@ -98,6 +98,22 @@ map_region(sfc7120_if_t *sfc, sfc7120_vm_map_type_t map_type,
     return req.addr;
 }
 
+/*
+ * Pre-fault an mmap'd CAPIO region. The kernel's cdev pager creates these
+ * pages on demand, and the first touch of each one costs a kernel fault. On
+ * the data path that shows up as a cold-start cliff: cross-machine ping-pong
+ * measures p99 43 ms cold versus 29 us once every page is resident, and a
+ * 10k pps flood drops ~98% of frames cold and 0% warm. Touching one byte per
+ * page at init moves that cost out of the measured path.
+ */
+static void
+sfc7120_prefault(volatile void * __capability base, size_t len)
+{
+    volatile uint8_t * __capability p = (volatile uint8_t * __capability)base;
+    for (size_t off = 0; off < len; off += 4096)
+        (void)p[off];
+}
+
 int
 sfc7120_init(sfc7120_if_t *sfc)
 {
@@ -174,6 +190,16 @@ sfc7120_init(sfc7120_if_t *sfc)
         goto fail;
     }
 
+    /* Make every DMA page resident before any traffic flows. Only the
+     * non-sliced DMA regions — never the MMIO slices. */
+    sfc7120_prefault(sfc->tx_buffer,
+                     (size_t)SFC7120_NUM_TX_DESC * SFC7120_TX_BUFFER_SIZE);
+    sfc7120_prefault(sfc->rx_buffer,
+                     (size_t)SFC7120_NUM_RX_DESC * SFC7120_RX_BUFFER_SIZE);
+    sfc7120_prefault(sfc->tx_desc_ring, (size_t)SFC7120_NUM_TX_DESC * 8);
+    sfc7120_prefault(sfc->rx_desc_ring, (size_t)SFC7120_NUM_RX_DESC * 8);
+    sfc7120_prefault(sfc->evq_ring,     (size_t)SFC7120_NUM_EVQ_ENTRY * 8);
+
     /* Phase C: per-register doorbell capabilities from the sliced BAR */
     if (map_region(sfc, SFC7120_MMIO_REGION,
                    &sfc->mmio_slices, &sfc->mmio_slices_len) == NULL) {
@@ -200,6 +226,7 @@ sfc7120_init(sfc7120_if_t *sfc)
      * kernel already seeded the RX ring at attach (sfc7120_post_rx_buffers),
      * so direct RX just consumes + re-posts from here. */
     sfc->rx_head = sfc->vi_info.rx_head;
+    sfc->evq_civac = (getenv("SFC_EVQ_CIVAC") != NULL);
     /* Seed our TX producer slot from the kernel's index so we stay aligned
      * with the NIC's persistent TX read pointer across re-opens. */
     sfc->tx_head = sfc->vi_info.tx_head;
@@ -310,7 +337,17 @@ sfc7120_poll(sfc7120_if_t *sfc, sfc7120_ev_t *evs, int max_evs)
     volatile uint64_t *evq = (volatile uint64_t *)sfc->evq_ring;
     int n = 0;
 
+    /* The EVQ ring is a non-sliced DMA region and is mapped cacheable in
+     * userspace, so a NIC-written event can sit invisible in DRAM until
+     * something else evicts the line. Invalidate the slot before reading it.
+     * Gated so the original path stays available for A/B. */
     while (n < max_evs) {
+        if (sfc->evq_civac) {
+            void * __capability _a =
+                (void * __capability)&evq[sfc->evq_read_ptr];
+            __asm__ volatile("dc civac, %0" :: "r"(_a) : "memory");
+            __asm__ volatile("dsb sy" ::: "memory");
+        }
         uint64_t ev = evq[sfc->evq_read_ptr];
 
         /* All-ones or all-zeros means no event written yet. */
@@ -419,9 +456,16 @@ sfc7120_rx_recv(sfc7120_if_t *sfc, void *buf, size_t *len_out, uint16_t rx_bytes
      * after a few hundred frames. Per-packet ring matches the oracle; don't
      * re-batch without re-deriving the producer from the NIC's real pointer. */
     __asm__ volatile("dsb sy" ::: "memory");
+    /* Producer = ONE PAST the slot just refilled, matching the convention in
+     * the kernel sfc7120_post_rx_buffers (fills 0..510, then writes 511).
+     * Writing rx_head itself told the NIC that valid descriptors end AT the
+     * slot just handed over, so the refilled buffer was never actually
+     * returned to the NIC. Invisible while the 504 kernel pre-posted
+     * descriptors lasted; once drained the RX ring starved and recovered only
+     * on a multi-ms timeout -- 21 RTT/s at back-to-back pacing, ~43 ms p99. */
+    sfc->rx_head = (sfc->rx_head + 1) & (SFC7120_NUM_RX_DESC - 1);
     *(volatile uint32_t * __capability)
         sfc->mmio_slices[SFC7120_SLICE_RX_DESC_DBL].addr = sfc->rx_head;
-    sfc->rx_head = (sfc->rx_head + 1) & (SFC7120_NUM_RX_DESC - 1);
 
     return 0;
 }

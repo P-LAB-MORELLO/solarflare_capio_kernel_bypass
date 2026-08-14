@@ -57,6 +57,7 @@ static int  sfc7120_fbsd_probe(device_t dev);
 static int  sfc7120_fbsd_attach(device_t dev);
 static int  sfc7120_fbsd_detach(device_t dev);
 static void sfc7120_interrupt_handler(void *arg);
+static int  sfc7120_sysctl_mac_stats(SYSCTL_HANDLER_ARGS);
 static int  sfc7120_intr_setup(sfc7120_softc_t *sc);
 static void sfc7120_intr_teardown(sfc7120_softc_t *sc);
 static void sfc7120_rx_task_handler(void *context, int pending);
@@ -295,6 +296,14 @@ sfc7120_alloc_dma_resources(sfc7120_softc_t *sc)
                                  rxb_size, PAGE_SIZE, "RX buffer");
     if (error != 0)
         goto fail_txb;
+
+    /* Diagnostic MAC_STATS DMA target (non-fatal if it fails). */
+    if (sfc7120_alloc_dmabuf(sc->dev, &sc->stats_dtag, &sc->stats_dmamap,
+                             &sc->stats_buf, &sc->stats_paddr,
+                             4096, 4096, "MAC stats") != 0) {
+        sc->stats_buf = NULL;
+        device_printf(sc->dev, "MAC stats buffer alloc failed (diagnostic only)\n");
+    }
 
     return 0;
 
@@ -799,6 +808,12 @@ sfc7120_fbsd_attach(device_t dev)
     sc->device_attached = true;
     // device_printf(dev, "TRACE: calling dump_regs\n"); -> apparently firmware needs to initialize the hardware registers first 
     sfc7120_dump_regs(sc);
+    SYSCTL_ADD_PROC(device_get_sysctl_ctx(dev),
+        SYSCTL_CHILDREN(device_get_sysctl_tree(dev)), OID_AUTO, "mac_stats",
+        CTLTYPE_INT | CTLFLAG_RW | CTLFLAG_NEEDGIANT, sc, 0,
+        sfc7120_sysctl_mac_stats, "I",
+        "write 1 to dump NIC MAC RX counters to dmesg");
+
     device_printf(dev, "sfc7120pol attached\n");
     return 0;
 
@@ -912,6 +927,21 @@ sfc7120_poll(struct cdev *dev, int events, struct thread *td)
         selrecord(td, &sc->selinfo);
     SFC7120_RX_UNLOCK(sc);
     return revents;
+}
+
+
+static int
+sfc7120_sysctl_mac_stats(SYSCTL_HANDLER_ARGS)
+{
+    sfc7120_softc_t *sc = (sfc7120_softc_t *)arg1;
+    int val = 0, error;
+
+    error = sysctl_handle_int(oidp, &val, 0, req);
+    if (error != 0 || req->newptr == NULL)
+        return error;
+    if (val != 0)
+        (void)sfc7120_mcdi_mac_stats(sc);
+    return 0;
 }
 
 static int
