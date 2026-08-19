@@ -1,0 +1,156 @@
+diff --git a/app/lpktgenlib.c b/app/lpktgenlib.c
+index b6b83bc..abf31d7 100644
+--- a/app/lpktgenlib.c
++++ b/app/lpktgenlib.c
+@@ -3100,6 +3100,46 @@ pkt_stats(lua_State *L, port_info_t *info)
+     setf_number(L, "min_us", cycles_to_us(lat->min_cycles));
+     setf_number(L, "avg_us", cycles_to_us(lat->avg_cycles));
+     setf_number(L, "max_us", cycles_to_us(lat->max_cycles));
++
++    /* Percentiles from the latency histogram. pktgen upstream reports only
++     * min/avg/max; a tail statistic is what matters for latency-under-load,
++     * and these DUTs have bimodal distributions where the mean hides the
++     * interesting behaviour. Buckets are PKTGEN_LAT_HIST_BUCKET_NS wide; the
++     * value reported is the upper edge of the bucket containing the quantile.
++     */
++    {
++        static const double qs[] = {0.50, 0.90, 0.99, 0.999};
++        static const char  *qn[] = {"p50_us", "p90_us", "p99_us", "p999_us"};
++        uint64_t total = lat->hist_count;
++        unsigned qi;
++
++        setf_integer(L, "hist_count", lat->hist_count);
++        setf_integer(L, "stamps_tx", lat->stamps_tx);
++        setf_integer(L, "hist_overflow", lat->hist_overflow);
++
++        for (qi = 0; qi < RTE_DIM(qs); qi++) {
++            double val = 0.0;
++            if (total > 0) {
++                uint64_t want = (uint64_t)(total * qs[qi]);
++                uint64_t acc  = 0;
++                unsigned b;
++                if (want == 0)
++                    want = 1;
++                for (b = 0; b < PKTGEN_LAT_HIST_BUCKETS; b++) {
++                    acc += lat->hist[b];
++                    if (acc >= want) {
++                        val = ((double)(b + 1) * PKTGEN_LAT_HIST_BUCKET_NS) / 1000.0;
++                        break;
++                    }
++                }
++                /* quantile fell past the last bucket */
++                if (val == 0.0 && lat->hist_overflow > 0)
++                    val = ((double)PKTGEN_LAT_HIST_BUCKETS *
++                           PKTGEN_LAT_HIST_BUCKET_NS) / 1000.0;
++            }
++            setf_number(L, qn[qi], val);
++        }
++    }
+     lua_settable(L, -3);
+ 
+     /* Now set the table as an array with pid as the index. */
+diff --git a/app/pktgen-latency.c b/app/pktgen-latency.c
+index 68ef958..afe2988 100644
+--- a/app/pktgen-latency.c
++++ b/app/pktgen-latency.c
+@@ -354,5 +354,24 @@ pktgen_latency_setup(port_info_t *info)
+     pkt->pktSize = LATENCY_PKT_SIZE;
+     pkt->ipProto = PG_IPPROTO_UDP;
+     pkt->ethType = RTE_ETHER_TYPE_IPV4;
+-    pkt->dport   = LATENCY_DPORT;
++    /* Send probes to the same destination port as the data stream so DUTs
++     * that bind a single UDP socket (the F-Stack echo servers) reflect them.
++     * The reserved LATENCY_DPORT only works against promiscuous reflectors. */
++    pkt->dport   = info->seq_pkt[SINGLE_PKT].dport;
++
++    /* Reset latency statistics so every trial stands alone; without this the
++     * scalars (and one stale-epoch sample) poison min/avg/max across a sweep. */
++    memset(info->latency.hist, 0, sizeof(info->latency.hist));
++    info->latency.hist_overflow     = 0;
++    info->latency.hist_count        = 0;
++    info->latency.num_latency_pkts  = 0;
++    info->latency.num_skipped       = 0;
++    info->latency.running_cycles    = 0;
++    info->latency.min_cycles        = 0;
++    info->latency.avg_cycles        = 0;
++    info->latency.max_cycles        = 0;
++    info->latency.jitter_count      = 0;
++    info->latency.prev_cycles       = 0;
++    info->latency.next_index        = 0;
++    info->latency.expect_index      = 0;
+ }
+diff --git a/app/pktgen-port-cfg.h b/app/pktgen-port-cfg.h
+index 130619f..248e053 100644
+--- a/app/pktgen-port-cfg.h
++++ b/app/pktgen-port-cfg.h
+@@ -182,6 +182,20 @@ typedef struct {
+     uint64_t max_cycles;              /**< maximum cycles per latency packet */
+     uint32_t next_index;              /**< Next index to use for sending latency packets */
+     uint32_t expect_index;            /**< Expected index for received latency packets */
++
++/* Latency histogram, added for RFC2544 latency-vs-load work.
++ * pktgen natively reports only min/avg/max, which cannot express a tail. The
++ * distributions on the DUTs under test are bimodal, so a percentile is the
++ * statistic that matters. Fixed linear buckets keep the fast path to one
++ * increment with no allocation and no locking (per-port, updated on the
++ * receiving lcore).
++ */
++#define PKTGEN_LAT_HIST_BUCKET_NS   2000                         /**< 2 us per bucket */
++#define PKTGEN_LAT_HIST_BUCKETS     4096                         /**< up to ~8.2 ms */
++    uint64_t hist[PKTGEN_LAT_HIST_BUCKETS];  /**< latency histogram, 0.5us buckets */
++    uint64_t hist_overflow;                  /**< samples beyond the last bucket */
++    uint64_t hist_count;                     /**< total samples recorded */
++    uint64_t stamps_tx;                      /**< inline stamps written on TX (diag) */
+     MARKER end_stats;
+ } latency_t;
+ 
+diff --git a/app/pktgen.c b/app/pktgen.c
+index 6598399..622610a 100644
+--- a/app/pktgen.c
++++ b/app/pktgen.c
+@@ -336,6 +336,21 @@ pktgen_tstamp_check(port_info_t *info, struct rte_mbuf **pkts, uint16_t nb_pkts)
+                 if (lat->max_cycles == 0 || cycles > lat->max_cycles)
+                     lat->max_cycles = cycles;
+ 
++                /* Histogram for percentile reporting. Bucket width is fixed
++                 * in nanoseconds; convert cycles once using the TSC rate. */
++                {
++                    uint64_t hz = rte_get_timer_hz();
++                    if (hz != 0) {
++                        uint64_t ns  = (cycles * 1000000000ULL) / hz;
++                        uint64_t idx = ns / PKTGEN_LAT_HIST_BUCKET_NS;
++                        if (idx < PKTGEN_LAT_HIST_BUCKETS)
++                            lat->hist[idx]++;
++                        else
++                            lat->hist_overflow++;
++                        lat->hist_count++;
++                    }
++                }
++
+                 jitter = (cycles > lat->prev_cycles) ? cycles - lat->prev_cycles
+                                                      : lat->prev_cycles - cycles;
+                 if (jitter > lat->jitter_threshold_cycles)
+diff --git a/app/pktgen.h b/app/pktgen.h
+index 728eecd..f09f586 100644
+--- a/app/pktgen.h
++++ b/app/pktgen.h
+@@ -419,6 +419,19 @@ typedef struct {
+ 
+ #define TSTAMP_MAGIC 0xf00dcafe
+ 
++/* Inline latency stamp carried in ordinary data packets.
++ *
++ * Placed immediately after Ethernet+IPv4+UDP (offset 42) and kept to 12 bytes
++ * so it fits a 64-byte frame, which has only 22 payload bytes. pktgen's own
++ * 24-byte tstamp_t at offset 48 cannot fit there, and 64B is the frame size
++ * that matters most for a packets-per-second benchmark.
++ */
++#define PKTGEN_INLINE_TS_OFFSET  42
++typedef struct inline_tstamp_s {
++    uint32_t magic;
++    uint64_t timestamp;
++} __attribute__((packed)) inline_tstamp_t;
++
+ static __inline__ void
+ pktgen_set_port_flags(port_info_t *info, uint32_t flags)
+ {
