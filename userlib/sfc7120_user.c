@@ -227,6 +227,12 @@ sfc7120_init(sfc7120_if_t *sfc)
      * so direct RX just consumes + re-posts from here. */
     sfc->rx_head = sfc->vi_info.rx_head;
     sfc->evq_civac = (getenv("SFC_EVQ_CIVAC") != NULL);
+    {
+        const char *w = getenv("SFC_RX_WINDOW");
+        sfc->rx_window = w ? (uint32_t)atoi(w) : 64;
+        if (sfc->rx_window < 1 || sfc->rx_window > SFC7120_NUM_RX_DESC - 1)
+            sfc->rx_window = 64;
+    }
     /* Seed our TX producer slot from the kernel's index so we stay aligned
      * with the NIC's persistent TX read pointer across re-opens. */
     sfc->tx_head = sfc->vi_info.tx_head;
@@ -459,10 +465,172 @@ sfc7120_rx_release(sfc7120_if_t *sfc)
 
     __asm__ volatile("dsb sy" ::: "memory");
     sfc->rx_head = (sfc->rx_head + 1) & (SFC7120_NUM_RX_DESC - 1);
+    /* Advertise a window of descriptors, not just the recycled slot.
+     * wptr = rx_head grants the NIC ONE outstanding descriptor, so bursts
+     * back up inside the NIC's packet buffer and never drain (one grant per
+     * arrival): every packet then arrives backlog/rate late. All slots
+     * always hold valid identity descriptors and slots ahead of rx_head are
+     * already consumed, so running the producer ahead is safe. 64 measured
+     * best; 448 and 2 wedge the RXQ, 8 degenerates to ~1 (the NIC honours
+     * wptr at 8-descriptor granularity). */
     *(volatile uint32_t * __capability)
-        sfc->mmio_slices[SFC7120_SLICE_RX_DESC_DBL].addr = sfc->rx_head;
+        sfc->mmio_slices[SFC7120_SLICE_RX_DESC_DBL].addr =
+        (sfc->rx_head + sfc->rx_window) & (SFC7120_NUM_RX_DESC - 1);
     return 0;
 }
+
+/*
+ * sfc7120_rx_release_paddr — sfc7120_rx_release() with the descriptor built
+ * from a caller-supplied bus address rather than this slot's library buffer,
+ * and the caller's handle recorded so the next completion on this slot can be
+ * matched back to it.
+ *
+ * Doorbell convention is identical to sfc7120_rx_release(): write the
+ * descriptor, dsb, advance rx_head, then write rx_head to RX_DESC_DBL. Keep
+ * these two in step; the post-increment doorbell value is load-bearing and a
+ * pre-increment variant is silently broken.
+ */
+int
+sfc7120_rx_release_paddr(sfc7120_if_t *sfc, uint64_t paddr, size_t len,
+                         void *cookie)
+{
+    if (sfc == NULL || sfc->rx_desc_ring == NULL || sfc->mmio_slices == NULL ||
+        sfc->mmio_slices_len <= SFC7120_SLICE_RX_DESC_DBL)
+        return -1;
+    if (paddr == 0 || len == 0 || len > 0x3fff)
+        return -1;
+
+    volatile uint64_t *rx_ring = (volatile uint64_t *)sfc->rx_desc_ring;
+    rx_ring[sfc->rx_head] =
+        ((uint64_t)(len & 0x3fff)               << 48) |
+        ((uint64_t)((paddr >> 32) & 0xffff)     << 32) |
+        ((uint64_t)(paddr & 0xffffffff));
+
+    sfc->rx_ext_cookie[sfc->rx_head] = cookie;
+
+    __asm__ volatile("dsb sy" ::: "memory");
+    sfc->rx_head = (sfc->rx_head + 1) & (SFC7120_NUM_RX_DESC - 1);
+    /* Advertise a window of descriptors, not just the recycled slot.
+     * wptr = rx_head grants the NIC ONE outstanding descriptor, so bursts
+     * back up inside the NIC's packet buffer and never drain (one grant per
+     * arrival): every packet then arrives backlog/rate late. All slots
+     * always hold valid identity descriptors and slots ahead of rx_head are
+     * already consumed, so running the producer ahead is safe. 64 measured
+     * best; 448 and 2 wedge the RXQ, 8 degenerates to ~1 (the NIC honours
+     * wptr at 8-descriptor granularity). */
+    *(volatile uint32_t * __capability)
+        sfc->mmio_slices[SFC7120_SLICE_RX_DESC_DBL].addr =
+        (sfc->rx_head + sfc->rx_window) & (SFC7120_NUM_RX_DESC - 1);
+    return 0;
+}
+
+/*
+ * sfc7120_rx_peek_ext — companion to sfc7120_rx_peek() for slots holding
+ * caller-posted buffers. Returns the cookie recorded when the buffer was
+ * posted; *cookie_out is NULL when the slot is still one of the library's own
+ * buffers, which is the case for the first lap around the ring after init.
+ *
+ * The length is taken from the EF10 RX prefix the NIC writes at the head of
+ * the buffer, falling back to the event byte count, exactly as rx_peek does.
+ * The caller owns the buffer from here and must post a replacement.
+ */
+int
+sfc7120_rx_peek_ext(sfc7120_if_t *sfc, void **cookie_out, size_t *len_out,
+                    uint16_t rx_bytes)
+{
+    if (sfc == NULL || cookie_out == NULL)
+        return -1;
+    if (sfc->rx_desc_ring == NULL || sfc->mmio_slices == NULL ||
+        sfc->mmio_slices_len <= SFC7120_SLICE_RX_DESC_DBL)
+        return -1;
+
+    sfc->used_poll = true;
+
+    void *cookie = sfc->rx_ext_cookie[sfc->rx_head];
+    *cookie_out = cookie;
+
+    if (len_out != NULL) {
+        uint16_t plen = 0;
+        if (cookie == NULL && sfc->rx_buffer != NULL) {
+            /* Library slot: the prefix is readable through rx_buffer. */
+            uint8_t *slot = (uint8_t *)sfc->rx_buffer +
+                            (size_t)sfc->rx_head * SFC7120_RX_BUFFER_SIZE;
+            plen = (uint16_t)slot[8] | ((uint16_t)slot[9] << 8);
+        }
+        if (plen == 0)
+            plen = (rx_bytes > SFC7120_EF10_RX_PREFIX_LEN)
+                   ? (uint16_t)(rx_bytes - SFC7120_EF10_RX_PREFIX_LEN) : 0;
+        *len_out = plen;
+    }
+    return 0;
+}
+
+/*
+ * Batched variants: descriptor writes only; the caller issues one
+ * sfc7120_rx_flush()/sfc7120_tx_flush() per burst instead of paying a
+ * dsb sy + MMIO doorbell write per packet.
+ */
+int
+sfc7120_rx_release_paddr_nodbl(sfc7120_if_t *sfc, uint64_t paddr, size_t len,
+                               void *cookie)
+{
+    if (sfc == NULL || sfc->rx_desc_ring == NULL)
+        return -1;
+    if (paddr == 0 || len == 0 || len > 0x3fff)
+        return -1;
+    volatile uint64_t *rx_ring = (volatile uint64_t *)sfc->rx_desc_ring;
+    rx_ring[sfc->rx_head] =
+        ((uint64_t)(len & 0x3fff)               << 48) |
+        ((uint64_t)((paddr >> 32) & 0xffff)     << 32) |
+        ((uint64_t)(paddr & 0xffffffff));
+    sfc->rx_ext_cookie[sfc->rx_head] = cookie;
+    sfc->rx_head = (sfc->rx_head + 1) & (SFC7120_NUM_RX_DESC - 1);
+    return 0;
+}
+
+void
+sfc7120_rx_flush(sfc7120_if_t *sfc)
+{
+    if (sfc == NULL || sfc->mmio_slices == NULL ||
+        sfc->mmio_slices_len <= SFC7120_SLICE_RX_DESC_DBL)
+        return;
+    __asm__ volatile("dsb sy" ::: "memory");
+    *(volatile uint32_t * __capability)
+        sfc->mmio_slices[SFC7120_SLICE_RX_DESC_DBL].addr =
+        (sfc->rx_head + sfc->rx_window) & (SFC7120_NUM_RX_DESC - 1);
+}
+
+int
+sfc7120_tx_post_paddr_nodbl(sfc7120_if_t *sfc, uint64_t paddr, size_t len)
+{
+    if (sfc == NULL || sfc->tx_desc_ring == NULL)
+        return -1;
+    if (len == 0 || len > SFC7120_TX_BUFFER_SIZE)
+        return -1;
+    volatile uint64_t *tx_ring = (volatile uint64_t *)sfc->tx_desc_ring;
+    tx_ring[sfc->tx_head] =
+        ((uint64_t)(len & 0x3fff)            << 48) |
+        ((uint64_t)((paddr >> 32) & 0xffff)  << 32) |
+        ((uint64_t)(paddr & 0xffffffff));
+    sfc->tx_head = (sfc->tx_head + 1) & (SFC7120_NUM_TX_DESC - 1);
+    return 0;
+}
+
+void
+sfc7120_tx_flush(sfc7120_if_t *sfc)
+{
+    if (sfc == NULL || sfc->mmio_slices == NULL ||
+        sfc->mmio_slices_len <= SFC7120_SLICE_TX_DESC_DBL)
+        return;
+    volatile uint32_t * __capability dbl =
+        (volatile uint32_t * __capability)
+        sfc->mmio_slices[SFC7120_SLICE_TX_DESC_DBL].addr;
+    __asm__ volatile("dsb sy" ::: "memory");
+    /* WPTR-only doorbell: dword 2 of TX_DESC_UPD. The NIC fetches the new
+     * descriptors from the ring, so no inline push is needed. */
+    dbl[2] = (uint32_t)sfc->tx_head;
+}
+
 
 /*
  * sfc7120_tx_post_paddr — sfc7120_tx_post() with the payload copy removed and

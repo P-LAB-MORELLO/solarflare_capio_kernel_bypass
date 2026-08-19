@@ -286,15 +286,17 @@ main(int argc, char **argv)
             break;
         }
         for (int j = 0; j < n; j++) {
-            if (evs[j].type == SFC7120_EV_TX) {
+            /* Only the fprintf was gated here; clock_gettime and fflush ran on
+             * every event regardless. Gate the whole block. */
+            if (ev_dbg && evs[j].type == SFC7120_EV_TX) {
                 struct timespec _t;
                 clock_gettime(CLOCK_MONOTONIC, &_t);
-                if (ev_dbg) fprintf(stderr, "TX_EV seen mono=%lld.%06ld\n",
+                fprintf(stderr, "TX_EV seen mono=%lld.%06ld\n",
                     (long long)_t.tv_sec, _t.tv_nsec / 1000);
                 fflush(stderr);
             }
-            if (evs[j].type == SFC7120_EV_RX) {
-                if (ev_dbg) fprintf(stderr, "RX_EV raw=%016llx\n",
+            if (ev_dbg && evs[j].type == SFC7120_EV_RX) {
+                fprintf(stderr, "RX_EV raw=%016llx\n",
                     (unsigned long long)evs[j].raw);
                 fflush(stderr);
             }
@@ -328,14 +330,20 @@ main(int argc, char **argv)
             struct spf_msg_hdr *msg =
                 (struct spf_msg_hdr *)((uint8_t *)udp + UDP_HDR_LEN);
 
+#ifdef SPF_STRICT
+            /* Legacy sockperf-aware mode: only echo client PONG requests and
+             * clear the CLIENT bit. Kept so the latency campaign binaries stay
+             * reproducible; the RFC2544 throughput work uses a plain echo so
+             * the generator needs no protocol knowledge. */
             uint16_t flags = ntohs(msg->flags);
             if (!(flags & SPF_MASK_CLIENT))     { ignored++; sfc7120_rx_release(&sfc); continue; }
             if (flags & SPF_MASK_WARMUP_MSG)    { ignored++; sfc7120_rx_release(&sfc); continue; }
             if (!(flags & SPF_MASK_PONG))       { ignored++; sfc7120_rx_release(&sfc); continue; }
-
-            /* Turn into a server response */
             flags &= ~SPF_MASK_CLIENT;
             msg->flags = htons(flags);
+#else
+            (void)msg;   /* plain UDP echo: reflect every datagram */
+#endif
 
             /* L2 swap */
             uint8_t tmp_mac[6];
@@ -377,7 +385,13 @@ main(int argc, char **argv)
             /* TX is posted (or failed); the slot can go back to the NIC. */
             sfc7120_rx_release(&sfc);
 
-            if (1) {
+            /* Per-echo progress logging is a write() syscall per packet on the
+             * hot path, and testpmd's sockperfecho does no such thing -- so
+             * leaving it on made the two arms do different work. Unconditional
+             * and flushed, it put 114 MB / 2.5M lines through the filesystem in
+             * a single campaign, a plausible source of tail-latency spikes that
+             * leave the median untouched. Gated. */
+            if (ev_dbg) {
                 struct timespec _rt;
                 clock_gettime(CLOCK_REALTIME, &_rt);
                 fprintf(stderr, "rx=%llu echoed=%llu t=%lld.%06ld\n",

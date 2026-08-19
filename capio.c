@@ -22,7 +22,7 @@
 #include <vm/vm_page.h>       
 #include <vm/vm_pager.h>
 
-#if CROSS_COMPILE
+#if defined(CROSS_COMPILE) && CROSS_COMPILE
 #include "../CheriModmap/modmap_api.h"
 #else
 #include "modmap_api.h"

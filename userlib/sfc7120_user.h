@@ -71,6 +71,15 @@ typedef struct sfc7120_if { // state struct, everything we need from kernel stub
     bool     vi_info_valid;        /* GET_VI_INFO succeeded — gates rptr sync */
     uint32_t evq_read_ptr;         /* our data-EVQ read ptr (seeded from vi_info) */
     bool     used_poll;
+    int  rx_abs_synced;       /* one-shot absolute slot sync done */
+    int  rx_syncdbg;
+    int  rx_nocivac;
+    int  rx_nosync;           /* disable RX descriptor resync (A/B) */
+    uint64_t rx_resyncs;      /* times rx_head was corrected */
+    int  rx_nodesccount;      /* disable vendor desc_count tracking (A/B) */
+    uint64_t rx_batches;      /* RX events covering >1 descriptor */
+    uint32_t rx_window;       /* RX descriptors advertised ahead of rx_head */
+    int  evq_legacy;          /* revert to per-entry zeroing (A/B) */
     int  evq_civac;            /* sfc7120_poll ran this session — only then
                                     * is evq_read_ptr ours to sync back. In the
                                     * ioctl-only path the kernel owns the EVQ
@@ -91,6 +100,12 @@ typedef struct sfc7120_if { // state struct, everything we need from kernel stub
         size_t  len;
     } region_maps[SFC7120_REGION_COUNT];
 
+    /* External-buffer RX (network-stack integration). rx_ext_cookie[slot]
+     * is the caller's handle for the buffer currently posted at that slot,
+     * or NULL when the slot still holds the library's own rx_buffer slot.
+     * Only sfc7120_rx_release_paddr() ever sets it. */
+    void   *rx_ext_cookie[SFC7120_NUM_RX_DESC];
+
     void   *cap_token;  /* malloc'd page — raw material for CAPIO_ATTACH seal */
 } sfc7120_if_t;
 
@@ -110,5 +125,11 @@ int  sfc7120_rx_peek(sfc7120_if_t *sfc, void **pkt_out, size_t *len_out,
 int  sfc7120_rx_release(sfc7120_if_t *sfc);
 int  sfc7120_rx_recv(sfc7120_if_t *sfc, void *buf, size_t *len_out,
                      uint16_t rx_bytes);
+
+int  sfc7120_rx_release_paddr_nodbl(sfc7120_if_t *sfc, uint64_t paddr,
+                                    size_t len, void *cookie);
+void sfc7120_rx_flush(sfc7120_if_t *sfc);
+int  sfc7120_tx_post_paddr_nodbl(sfc7120_if_t *sfc, uint64_t paddr, size_t len);
+void sfc7120_tx_flush(sfc7120_if_t *sfc);
 
 #endif /* SFC7120_USER_H */
