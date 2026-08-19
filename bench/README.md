@@ -24,13 +24,16 @@ pktgen histogram (`pktgen-latency-histogram.patch`, 2us buckets).
   heap-revocation quarantine stalls drop burst tails at all loads.
 
 ## Known caveats (also see commit messages)
-- fsB/fsBrev latency columns at >=1024B and >=2% rate show a reproducible
-  ~195-packet standing queue (p50 falls as rate rises). Reproduced across
-  kernel-module configs and reboots; mechanism in the CAPIO PMD/NIC
-  interaction at large frames, not yet isolated. Loss/throughput columns
-  and all 64-512B rows are unaffected.
-- fsB/fsBrev run with SFC_RX_WINDOW=384 (F-Stack consumes in bursts);
-  the userlib default of 64 suits the tight raw-echo loop.
+- RESOLVED: the earlier large-frame standing queue was the RX descriptor
+  window exceeding the NIC's descriptor-fetch capacity. W<=256 is clean at
+  every size and rate; W=384 randomly picks 8ms-stale replies or a wedge per
+  boot; W>=448 kills the RXQ outright. fsB/fsBrev big-frame rows were
+  re-collected at SFC_RX_WINDOW=256 (small-frame rows are window-insensitive:
+  values byte-identical at 256 and 384). The userlib default of 64 suits the
+  tight raw-echo loop; F-Stack's bursty consumer wants 256.
+- The PMD posts replacement RX descriptors at the ring TAIL (never rewriting
+  a doorbell-covered slot) and carries a CAPIO_STATS heartbeat plus a
+  CAPIO_RX_COPY diagnostic mode.
 - fsBrev = same binary as fsB; only `elfctl -e +nocherirevoke` differs.
   Its 1024/1280/1514 rows were collected in a separate 18-min run because
   ARP expiry (~20 min) under revocation stalls breaks re-resolution.

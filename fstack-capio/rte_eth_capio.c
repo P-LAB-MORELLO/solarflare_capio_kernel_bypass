@@ -150,6 +150,29 @@ eth_capio_rx(void *q, struct rte_mbuf **bufs, uint16_t nb_bufs)
         void *cookie = NULL;
         size_t len = 0;
 
+        /* heartbeat moved here: the old placement sat after this continue,
+         * so TX events were invisible (ev_tx always read 0). */
+        {
+            static int stats_on2 = -1;
+            static time_t last2;
+            static uint64_t hb_rx, hb_tx, hb_oth;
+            if (stats_on2 < 0) stats_on2 = (getenv("CAPIO_STATS") != NULL);
+            if (evs[i].type == SFC7120_EV_RX) hb_rx++;
+            else if (evs[i].type == SFC7120_EV_TX) hb_tx++;
+            else hb_oth++;
+            if (stats_on2) {
+                time_t now2 = time(NULL);
+                if (now2 != last2) {
+                    last2 = now2;
+                    fprintf(stderr, "HB rx=%lu tx=%lu oth=%lu txp=%lu lastfree=%u txh=%u\n",
+                        (unsigned long)hb_rx, (unsigned long)hb_tx, (unsigned long)hb_oth,
+                        (unsigned long)pi->txq.tx_pkts,
+                        (unsigned)pi->txq.last_freed,
+                        (unsigned)pi->sfc.tx_head);
+                    fflush(stderr);
+                }
+            }
+        }
         if (evs[i].type != SFC7120_EV_RX) {
             /* Reap TX completions: everything up to the reported slot is done
              * with, so its buffer can go back to the pool. */
@@ -179,6 +202,28 @@ eth_capio_rx(void *q, struct rte_mbuf **bufs, uint16_t nb_bufs)
             continue;
         }
 
+        /* CAPIO_STATS=1: 1-second counter heartbeat for wedge autopsies */
+        {
+            static int stats_on = -1;
+            static time_t last;
+            static uint64_t ev_rx, ev_tx, ev_other;
+            if (stats_on < 0) stats_on = (getenv("CAPIO_STATS") != NULL);
+            if (evs[i].type == SFC7120_EV_RX) ev_rx++;
+            else if (evs[i].type == SFC7120_EV_TX) ev_tx++;
+            else ev_other++;
+            if (stats_on) {
+                time_t now = time(NULL);
+                if (now != last) {
+                    last = now;
+                    fprintf(stderr, "CSTAT ev_rx=%lu ev_tx=%lu ev_o=%lu rxp=%lu nombuf=%lu txp=%lu txd=%lu rxh=%u txh=%u stash=%d\n",
+                        (unsigned long)ev_rx, (unsigned long)ev_tx, (unsigned long)ev_other,
+                        (unsigned long)rxq->rx_pkts, (unsigned long)rxq->rx_nombuf,
+                        (unsigned long)pi->txq.tx_pkts, (unsigned long)pi->txq.tx_dropped,
+                        (unsigned)pi->sfc.rx_head, (unsigned)pi->sfc.tx_head, rxq->nstash);
+                    fflush(stderr);
+                }
+            }
+        }
         if (sfc7120_rx_peek_ext(&pi->sfc, &cookie, &len, evs[i].rx_bytes) != 0)
             break;
 
@@ -195,6 +240,21 @@ eth_capio_rx(void *q, struct rte_mbuf **bufs, uint16_t nb_bufs)
             continue;
         }
 
+        /* RX is copy-mode: identity descriptors stay in the ring forever
+         * (their re-post rewrites the same bytes, so the NIC's descriptor
+         * cache can never go stale) and each frame is copied into a fresh
+         * mbuf. Zero-copy mbuf swapping rewrites descriptors the doorbell
+         * already covered -- including the 511 the kernel priming advertised
+         * at attach -- and EF10 may use its cached copy, filling the OLD
+         * buffer while the cookie names the new one: stale replies (lag) or
+         * unparseable ones (wedge), mode chosen by pool-recycling distance.
+         * CAPIO_RX_ZC=1 re-enables the swap path for future work.
+         * The memcpy is noise against the stack's per-packet cost. */
+        {
+            static int rx_zc = -1;
+            if (rx_zc < 0) rx_zc = (getenv("CAPIO_RX_COPY") != NULL);
+            if (rx_zc) cookie = NULL;
+        }
         if (cookie == NULL) {
             /* First lap after init: this slot is still a library buffer, so
              * copy out. Steady state never takes this branch. */
@@ -216,6 +276,27 @@ eth_capio_rx(void *q, struct rte_mbuf **bufs, uint16_t nb_bufs)
             }
             rte_memcpy(rte_pktmbuf_mtod(m, void *), pkt, plen);
             len = plen;
+            /* copy-mode: the slot keeps its identity descriptor; re-post it
+             * (same bytes, cache-safe) and return the spare mbuf. No mbuf
+             * descriptor ever enters the ring. */
+            {
+                static int rx_zc2 = -1;
+                if (rx_zc2 < 0) rx_zc2 = (getenv("CAPIO_RX_COPY") != NULL);
+                if (rx_zc2) {
+                    rte_pktmbuf_free(repl);
+                    sfc7120_rx_release(&pi->sfc);
+                    m->pkt_len = m->data_len = (uint16_t)len;
+                    m->nb_segs = 1;
+                    m->next = NULL;
+                    m->port = rxq->port_id;
+                    m->ol_flags |= RTE_MBUF_F_RX_IP_CKSUM_GOOD |
+                                   RTE_MBUF_F_RX_L4_CKSUM_GOOD;
+                    bufs[n_out++] = m;
+                    rxq->rx_pkts++;
+                    rxq->rx_bytes += len;
+                    continue;
+                }
+            }
         } else {
             /* Steady state: the NIC wrote directly into this mbuf. Skip the
              * prefix it laid down ahead of the frame. */

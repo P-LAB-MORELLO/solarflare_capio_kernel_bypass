@@ -579,11 +579,16 @@ sfc7120_rx_release_paddr_nodbl(sfc7120_if_t *sfc, uint64_t paddr, size_t len,
     if (paddr == 0 || len == 0 || len > 0x3fff)
         return -1;
     volatile uint64_t *rx_ring = (volatile uint64_t *)sfc->rx_desc_ring;
-    rx_ring[sfc->rx_head] =
+    /* tail-posted: the descriptor goes to the slot the doorbell has NOT yet
+     * covered. Writing at rx_head rewrites a descriptor advertised up to
+     * rx_window packets ago, which the NIC may have prefetched -- it then
+     * fills the OLD mbuf while the cookie names the new one. */
+    uint32_t tail = (sfc->rx_head + sfc->rx_window) & (SFC7120_NUM_RX_DESC - 1);
+    rx_ring[tail] =
         ((uint64_t)(len & 0x3fff)               << 48) |
         ((uint64_t)((paddr >> 32) & 0xffff)     << 32) |
         ((uint64_t)(paddr & 0xffffffff));
-    sfc->rx_ext_cookie[sfc->rx_head] = cookie;
+    sfc->rx_ext_cookie[tail] = cookie;
     sfc->rx_head = (sfc->rx_head + 1) & (SFC7120_NUM_RX_DESC - 1);
     return 0;
 }
