@@ -1,0 +1,12 @@
+# SPDX-License-Identifier: BSD-3-Clause
+# net_capio: the CAPIO userlib exposed as a DPDK vdev PMD, so F-Stack runs
+# byte-identical code on both arms and the driver is the only variable.
+if not is_freebsd
+    build = false
+    reason = 'only supported on FreeBSD/CheriBSD'
+    subdir_done()
+endif
+
+sources = files('rte_eth_capio.c', 'sfc7120_user.c')
+includes += include_directories('.')
+cflags += ['-I/root/E1000Lwip/include/netif', '-I/root/sfc_main']

@@ -1,0 +1,1800 @@
+diff --git a/dpdk/config/arm/meson.build b/dpdk/config/arm/meson.build
+index 4444083b..d60ab05e 100644
+--- a/dpdk/config/arm/meson.build
++++ b/dpdk/config/arm/meson.build
+@@ -877,9 +877,9 @@ if update_flags
+         if part_number_config.get('force_march', false)
+             candidate_march = part_number_config['march']
+         else
+-            supported_marchs = ['armv9-a', 'armv8.7-a', 'armv8.6-a', 'armv8.5-a', 'armv8.4-a', 'armv8.3-a',
++            supported_marchs = ['morello', 'armv9-a', 'armv8.7-a', 'armv8.6-a', 'armv8.5-a', 'armv8.4-a', 'armv8.3-a',
+                                 'armv8.2-a', 'armv8.1-a', 'armv8-a']
+-            check_compiler_support = false
++            check_compiler_support = cc.has_argument('-march=morello')
+             foreach supported_march: supported_marchs
+                 if supported_march == part_number_config['march']
+                     # start checking from this version downwards
+@@ -893,6 +893,7 @@ if update_flags
+                 endif
+             endforeach
+             if (part_number_config.has_key('fallback_march') and
++                candidate_march != 'morello' and
+                 candidate_march != part_number_config['march'] and
+                 cc.has_argument('-march=' + part_number_config['fallback_march']))
+                     candidate_march = part_number_config['fallback_march']
+diff --git a/dpdk/config/meson.build b/dpdk/config/meson.build
+index b6b3558e..d07c749a 100644
+--- a/dpdk/config/meson.build
++++ b/dpdk/config/meson.build
+@@ -191,7 +191,7 @@ endif
+ 
+ toolchain = cc.get_id()
+ 
+-dpdk_conf.set('RTE_ARCH_64', cc.sizeof('void *') == 8)
++dpdk_conf.set('RTE_ARCH_64', cc.sizeof('void *') >= 8)
+ dpdk_conf.set('RTE_ARCH_32', cc.sizeof('void *') == 4)
+ 
+ if not is_windows
+diff --git a/dpdk/drivers/net/meson.build b/dpdk/drivers/net/meson.build
+index dafd637b..2b7fcee9 100644
+--- a/dpdk/drivers/net/meson.build
++++ b/dpdk/drivers/net/meson.build
+@@ -46,6 +46,7 @@ drivers = [
+         'nfp',
+         'ngbe',
+         'ntnic',
++        'capio',
+         'null',
+         'octeontx',
+         'octeon_ep',
+diff --git a/dpdk/kernel/freebsd/contigmem/contigmem.c b/dpdk/kernel/freebsd/contigmem/contigmem.c
+index 591e46dd..3321773a 100644
+--- a/dpdk/kernel/freebsd/contigmem/contigmem.c
++++ b/dpdk/kernel/freebsd/contigmem/contigmem.c
+@@ -51,7 +51,6 @@ static d_close_t        contigmem_close;
+ 
+ static int              contigmem_num_buffers = RTE_CONTIGMEM_DEFAULT_NUM_BUFS;
+ static int64_t          contigmem_buffer_size = RTE_CONTIGMEM_DEFAULT_BUF_SIZE;
+-static bool             contigmem_coredump_enable;
+ 
+ static eventhandler_tag contigmem_eh_tag;
+ static struct contigmem_buffer contigmem_buffers[RTE_CONTIGMEM_MAX_NUM_BUFS];
+@@ -60,7 +59,6 @@ static int              contigmem_refcnt;
+ 
+ TUNABLE_INT("hw.contigmem.num_buffers", &contigmem_num_buffers);
+ TUNABLE_QUAD("hw.contigmem.buffer_size", &contigmem_buffer_size);
+-TUNABLE_BOOL("hw.contigmem.coredump_enable", &contigmem_coredump_enable);
+ 
+ static SYSCTL_NODE(_hw, OID_AUTO, contigmem, CTLFLAG_RD, 0, "contigmem");
+ 
+@@ -70,8 +68,6 @@ SYSCTL_QUAD(_hw_contigmem, OID_AUTO, buffer_size, CTLFLAG_RD,
+ 	&contigmem_buffer_size, 0, "Size of each contiguous buffer");
+ SYSCTL_INT(_hw_contigmem, OID_AUTO, num_references, CTLFLAG_RD,
+ 	&contigmem_refcnt, 0, "Number of references to contigmem");
+-SYSCTL_BOOL(_hw_contigmem, OID_AUTO, coredump_enable, CTLFLAG_RD,
+-	&contigmem_coredump_enable, 0, "Include mapped buffers in core dump");
+ 
+ static SYSCTL_NODE(_hw_contigmem, OID_AUTO, physaddr, CTLFLAG_RD, 0,
+ 	"physaddr");
+@@ -145,8 +141,8 @@ contigmem_load(void)
+ 			goto error;
+ 		}
+ 
+-		printf("%2u: virt=%p phys=%p\n", i, addr,
+-			(void *)pmap_kextract((vm_offset_t)addr));
++		printf("%2u: virt=%p phys=%lx\n", i, addr,
++			(unsigned long)pmap_kextract((vm_offset_t)addr));
+ 
+ 		mtx_init(&contigmem_buffers[i].mtx, "contigmem", NULL, MTX_DEF);
+ 		contigmem_buffers[i].addr = addr;
+@@ -302,12 +298,24 @@ contigmem_cdev_pager_fault(vm_object_t object, vm_ooffset_t offset, int prot,
+ 		page = *mres;
+ 		VM_OBJECT_WLOCK(object);
+ 		vm_page_updatefake(page, paddr, memattr);
++#ifdef PGA_CAPSTORE
++		/* pmap requires PGA_CAPSTORE before it will grant
++		 * VM_PROT_WRITE_CAP; fake pages start without it, so a
++		 * capability store into this region would fault. */
++		vm_page_aflag_set(page, PGA_CAPSTORE);
++#endif
+ 	} else {
+ 		/*
+ 		 * Replace the passed in reqpage page with our own fake page and
+ 		 * free up the original page.
+ 		 */
+ 		page = vm_page_getfake(paddr, memattr);
++#ifdef PGA_CAPSTORE
++		/* pmap requires PGA_CAPSTORE before it will grant
++		 * VM_PROT_WRITE_CAP; fake pages start without it, so a
++		 * capability store into this region would fault. */
++		vm_page_aflag_set(page, PGA_CAPSTORE);
++#endif
+ 		VM_OBJECT_WLOCK(object);
+ #if __FreeBSD__ >= 13
+ 		vm_page_replace(page, object, (*mres)->pindex, *mres);
+@@ -361,9 +369,21 @@ contigmem_mmap_single(struct cdev *cdev, vm_ooffset_t *offset, vm_size_t size,
+ 	*obj = cdev_pager_allocate(vmh, OBJT_DEVICE, &contigmem_cdev_pager_ops,
+ 			size, nprot, *offset, curthread->td_ucred);
+ 
+-	/* Mappings backed by OBJ_FICTITIOUS are excluded from core dump. */
+-	if (contigmem_coredump_enable)
+-		(*obj)->flags &= ~OBJ_FICTITIOUS;
+-
++	if (*obj != NULL) {
++		VM_OBJECT_WLOCK(*obj);
++		/*
++		 * Capability tags do not exist in uncacheable memory, and CheriBSD
++		 * additionally strips VM_PROT_CAP from any mapping whose object is
++		 * not flagged OBJ_HASCAP. DPDK stores its malloc heap metadata
++		 * (pointers) inside this region, so both are required or the first
++		 * capability store takes a tag-store page fault. This is real
++		 * contigmalloc()d DRAM, so it can hold tags.
++		 */
++		(*obj)->memattr = VM_MEMATTR_WRITE_BACK;
++#ifdef OBJ_HASCAP
++		vm_object_set_flag(*obj, OBJ_HASCAP);
++#endif
++		VM_OBJECT_WUNLOCK(*obj);
++	}
+ 	return 0;
+ }
+diff --git a/dpdk/lib/eal/arm/include/rte_atomic_64.h b/dpdk/lib/eal/arm/include/rte_atomic_64.h
+index 181bb609..e413b24d 100644
+--- a/dpdk/lib/eal/arm/include/rte_atomic_64.h
++++ b/dpdk/lib/eal/arm/include/rte_atomic_64.h
+@@ -44,7 +44,8 @@ rte_atomic_thread_fence(rte_memory_order memorder)
+ 
+ /*------------------------ 128 bit atomic operations -------------------------*/
+ 
+-#if defined(__ARM_FEATURE_ATOMICS) || defined(RTE_ARM_FEATURE_ATOMICS)
++#if (defined(__ARM_FEATURE_ATOMICS) || defined(RTE_ARM_FEATURE_ATOMICS)) && \
++	!defined(__CHERI_PURE_CAPABILITY__)
+ 
+ #if defined(RTE_CC_CLANG)
+ #define __ATOMIC128_CAS_OP(cas_op_name, op_string)                          \
+@@ -115,7 +116,8 @@ rte_atomic128_cmp_exchange(rte_int128_t *dst, rte_int128_t *exp,
+ 	rte_int128_t desired = *src;
+ 	rte_int128_t old;
+ 
+-#if defined(__ARM_FEATURE_ATOMICS) || defined(RTE_ARM_FEATURE_ATOMICS)
++#if (defined(__ARM_FEATURE_ATOMICS) || defined(RTE_ARM_FEATURE_ATOMICS)) && \
++	!defined(__CHERI_PURE_CAPABILITY__)
+ 	if (success == rte_memory_order_relaxed)
+ 		__cas_128_relaxed(dst, exp, desired);
+ 	else if (success == rte_memory_order_acquire)
+diff --git a/dpdk/lib/eal/arm/include/rte_io_64.h b/dpdk/lib/eal/arm/include/rte_io_64.h
+index 88db82a7..9334ae1c 100644
+--- a/dpdk/lib/eal/arm/include/rte_io_64.h
++++ b/dpdk/lib/eal/arm/include/rte_io_64.h
+@@ -23,7 +23,7 @@ rte_read8_relaxed(const volatile void *addr)
+ 	uint8_t val;
+ 
+ 	asm volatile(
+-		    "ldrb %w[val], [%x[addr]]"
++		    "ldrb %w[val], [%[addr]]"
+ 		    : [val] "=r" (val)
+ 		    : [addr] "r" (addr));
+ 	return val;
+@@ -35,7 +35,7 @@ rte_read16_relaxed(const volatile void *addr)
+ 	uint16_t val;
+ 
+ 	asm volatile(
+-		    "ldrh %w[val], [%x[addr]]"
++		    "ldrh %w[val], [%[addr]]"
+ 		    : [val] "=r" (val)
+ 		    : [addr] "r" (addr));
+ 	return val;
+@@ -47,7 +47,7 @@ rte_read32_relaxed(const volatile void *addr)
+ 	uint32_t val;
+ 
+ 	asm volatile(
+-		    "ldr %w[val], [%x[addr]]"
++		    "ldr %w[val], [%[addr]]"
+ 		    : [val] "=r" (val)
+ 		    : [addr] "r" (addr));
+ 	return val;
+@@ -59,7 +59,7 @@ rte_read64_relaxed(const volatile void *addr)
+ 	uint64_t val;
+ 
+ 	asm volatile(
+-		    "ldr %x[val], [%x[addr]]"
++		    "ldr %x[val], [%[addr]]"
+ 		    : [val] "=r" (val)
+ 		    : [addr] "r" (addr));
+ 	return val;
+@@ -69,7 +69,7 @@ static __rte_always_inline void
+ rte_write8_relaxed(uint8_t val, volatile void *addr)
+ {
+ 	asm volatile(
+-		    "strb %w[val], [%x[addr]]"
++		    "strb %w[val], [%[addr]]"
+ 		    :
+ 		    : [val] "r" (val), [addr] "r" (addr));
+ }
+@@ -78,7 +78,7 @@ static __rte_always_inline void
+ rte_write16_relaxed(uint16_t val, volatile void *addr)
+ {
+ 	asm volatile(
+-		    "strh %w[val], [%x[addr]]"
++		    "strh %w[val], [%[addr]]"
+ 		    :
+ 		    : [val] "r" (val), [addr] "r" (addr));
+ }
+@@ -87,7 +87,7 @@ static __rte_always_inline void
+ rte_write32_relaxed(uint32_t val, volatile void *addr)
+ {
+ 	asm volatile(
+-		    "str %w[val], [%x[addr]]"
++		    "str %w[val], [%[addr]]"
+ 		    :
+ 		    : [val] "r" (val), [addr] "r" (addr));
+ }
+@@ -96,7 +96,7 @@ static __rte_always_inline void
+ rte_write64_relaxed(uint64_t val, volatile void *addr)
+ {
+ 	asm volatile(
+-		    "str %x[val], [%x[addr]]"
++		    "str %x[val], [%[addr]]"
+ 		    :
+ 		    : [val] "r" (val), [addr] "r" (addr));
+ }
+diff --git a/dpdk/lib/eal/arm/include/rte_pause_64.h b/dpdk/lib/eal/arm/include/rte_pause_64.h
+index 81d45491..25a50114 100644
+--- a/dpdk/lib/eal/arm/include/rte_pause_64.h
++++ b/dpdk/lib/eal/arm/include/rte_pause_64.h
+@@ -53,12 +53,12 @@ static inline void rte_pause(void)
+  */
+ #define __RTE_ARM_LOAD_EXC_8(src, dst, memorder) {       \
+ 	if (memorder == rte_memory_order_relaxed) {       \
+-		asm volatile("ldxrb %w[tmp], [%x[addr]]"  \
++		asm volatile("ldxrb %w[tmp], [%[addr]]"  \
+ 			: [tmp] "=&r" (dst)               \
+ 			: [addr] "r" (src)                \
+ 			: "memory");                      \
+ 	} else {                                          \
+-		asm volatile("ldaxrb %w[tmp], [%x[addr]]" \
++		asm volatile("ldaxrb %w[tmp], [%[addr]]" \
+ 			: [tmp] "=&r" (dst)               \
+ 			: [addr] "r" (src)                \
+ 			: "memory");                      \
+@@ -72,12 +72,12 @@ static inline void rte_pause(void)
+  */
+ #define __RTE_ARM_LOAD_EXC_16(src, dst, memorder) {       \
+ 	if (memorder == rte_memory_order_relaxed) {       \
+-		asm volatile("ldxrh %w[tmp], [%x[addr]]"  \
++		asm volatile("ldxrh %w[tmp], [%[addr]]"  \
+ 			: [tmp] "=&r" (dst)               \
+ 			: [addr] "r" (src)                \
+ 			: "memory");                      \
+ 	} else {                                          \
+-		asm volatile("ldaxrh %w[tmp], [%x[addr]]" \
++		asm volatile("ldaxrh %w[tmp], [%[addr]]" \
+ 			: [tmp] "=&r" (dst)               \
+ 			: [addr] "r" (src)                \
+ 			: "memory");                      \
+@@ -91,12 +91,12 @@ static inline void rte_pause(void)
+  */
+ #define __RTE_ARM_LOAD_EXC_32(src, dst, memorder) {      \
+ 	if (memorder == rte_memory_order_relaxed) {      \
+-		asm volatile("ldxr %w[tmp], [%x[addr]]"  \
++		asm volatile("ldxr %w[tmp], [%[addr]]"  \
+ 			: [tmp] "=&r" (dst)              \
+ 			: [addr] "r" (src)               \
+ 			: "memory");                     \
+ 	} else {                                         \
+-		asm volatile("ldaxr %w[tmp], [%x[addr]]" \
++		asm volatile("ldaxr %w[tmp], [%[addr]]" \
+ 			: [tmp] "=&r" (dst)              \
+ 			: [addr] "r" (src)               \
+ 			: "memory");                     \
+@@ -110,12 +110,12 @@ static inline void rte_pause(void)
+  */
+ #define __RTE_ARM_LOAD_EXC_64(src, dst, memorder) {      \
+ 	if (memorder == rte_memory_order_relaxed) {      \
+-		asm volatile("ldxr %x[tmp], [%x[addr]]"  \
++		asm volatile("ldxr %x[tmp], [%[addr]]"  \
+ 			: [tmp] "=&r" (dst)              \
+ 			: [addr] "r" (src)               \
+ 			: "memory");                     \
+ 	} else {                                         \
+-		asm volatile("ldaxr %x[tmp], [%x[addr]]" \
++		asm volatile("ldaxr %x[tmp], [%[addr]]" \
+ 			: [tmp] "=&r" (dst)              \
+ 			: [addr] "r" (src)               \
+ 			: "memory");                     \
+@@ -130,13 +130,13 @@ static inline void rte_pause(void)
+ #define __RTE_ARM_LOAD_EXC_128(src, dst, memorder) {                    \
+ 	volatile rte_int128_t *dst_128 = (volatile rte_int128_t *)&dst; \
+ 	if (memorder == rte_memory_order_relaxed) {                     \
+-		asm volatile("ldxp %x[tmp0], %x[tmp1], [%x[addr]]"      \
++		asm volatile("ldxp %x[tmp0], %x[tmp1], [%[addr]]"      \
+ 			: [tmp0] "=&r" (dst_128->val[0]),               \
+ 			  [tmp1] "=&r" (dst_128->val[1])                \
+ 			: [addr] "r" (src)                              \
+ 			: "memory");                                    \
+ 	} else {                                                        \
+-		asm volatile("ldaxp %x[tmp0], %x[tmp1], [%x[addr]]"     \
++		asm volatile("ldaxp %x[tmp0], %x[tmp1], [%[addr]]"     \
+ 			: [tmp0] "=&r" (dst_128->val[0]),               \
+ 			  [tmp1] "=&r" (dst_128->val[1])                \
+ 			: [addr] "r" (src)                              \
+diff --git a/dpdk/lib/eal/common/eal_common_memory.c b/dpdk/lib/eal/common/eal_common_memory.c
+index 0c997201..71b6ea8f 100644
+--- a/dpdk/lib/eal/common/eal_common_memory.c
++++ b/dpdk/lib/eal/common/eal_common_memory.c
+@@ -65,12 +65,16 @@ eal_get_virtual_area(void *requested_addr, size_t *size,
+ 
+ 	if (next_baseaddr == NULL && internal_conf->base_virtaddr != 0 &&
+ 			rte_eal_process_type() == RTE_PROC_PRIMARY)
++#ifndef __CHERI_PURE_CAPABILITY__
+ 		next_baseaddr = (void *) internal_conf->base_virtaddr;
++#endif
+ 
+ #ifdef RTE_ARCH_64
+ 	if (next_baseaddr == NULL && internal_conf->base_virtaddr == 0 &&
+ 			rte_eal_process_type() == RTE_PROC_PRIMARY)
++#ifndef __CHERI_PURE_CAPABILITY__
+ 		next_baseaddr = (void *) eal_get_baseaddr();
++#endif
+ #endif
+ 	if (requested_addr == NULL && next_baseaddr != NULL) {
+ 		requested_addr = next_baseaddr;
+diff --git a/dpdk/lib/eal/common/eal_private.h b/dpdk/lib/eal/common/eal_private.h
+index a10db6a3..9ad8a3c8 100644
+--- a/dpdk/lib/eal/common/eal_private.h
++++ b/dpdk/lib/eal/common/eal_private.h
+@@ -62,7 +62,11 @@ struct rte_config {
+ 	 * DPDK instances
+ 	 */
+ 	struct rte_mem_config *mem_config;
+-} __rte_packed;
++}
++#ifndef __CHERI_PURE_CAPABILITY__
++__rte_packed
++#endif
++;
+ 
+ /**
+  * Get the global configuration structure.
+diff --git a/dpdk/lib/eal/freebsd/eal_cpuflags.c b/dpdk/lib/eal/freebsd/eal_cpuflags.c
+index 69b161ea..210f9c08 100644
+--- a/dpdk/lib/eal/freebsd/eal_cpuflags.c
++++ b/dpdk/lib/eal/freebsd/eal_cpuflags.c
+@@ -2,20 +2,26 @@
+  * Copyright 2018 Mellanox Technologies, Ltd
+  */
+ 
++#include <string.h>
++#include <sys/auxv.h>
++
+ #include <rte_common.h>
+ #include <rte_cpuflags.h>
+ 
+ unsigned long
+-rte_cpu_getauxval(unsigned long type __rte_unused)
++rte_cpu_getauxval(unsigned long type)
+ {
+-	/* not implemented */
+-	return 0;
++	unsigned long val = 0;
++	if (elf_aux_info((int)type, &val, sizeof(val)) != 0)
++		return 0;
++	return val;
+ }
+ 
+ int
+-rte_cpu_strcmp_auxval(unsigned long type __rte_unused,
+-		const char *str __rte_unused)
++rte_cpu_strcmp_auxval(unsigned long type, const char *str)
+ {
+-	/* not implemented */
+-	return -1;
++	char buf[64];
++	if (elf_aux_info((int)type, buf, sizeof(buf)) != 0)
++		return -1;
++	return strcmp(buf, str);
+ }
+diff --git a/dpdk/lib/eal/freebsd/eal_memory.c b/dpdk/lib/eal/freebsd/eal_memory.c
+index a6f3ba22..6fd814d3 100644
+--- a/dpdk/lib/eal/freebsd/eal_memory.c
++++ b/dpdk/lib/eal/freebsd/eal_memory.c
+@@ -21,6 +21,19 @@
+ #include "eal_memcfg.h"
+ #include "eal_options.h"
+ 
++/*
++ * CheriBSD requires an explicit opt-in for mappings that will hold capability
++ * tags. DPDK stores malloc heap metadata (pointers) inside the contigmem
++ * region, so without this the first capability store takes a tag-store page
++ * fault. The contigmem module must also mark the object OBJ_HASCAP and the
++ * pages PGA_CAPSTORE for this to be granted.
++ */
++#if defined(__CHERI_PURE_CAPABILITY__) && defined(PROT_CAP)
++#define EAL_PROT_RW	(PROT_READ | PROT_WRITE | PROT_CAP)
++#else
++#define EAL_PROT_RW	(PROT_READ | PROT_WRITE)
++#endif
++
+ #define EAL_PAGE_SIZE (sysconf(_SC_PAGESIZE))
+ 
+ uint64_t eal_get_baseaddr(void)
+@@ -81,7 +94,7 @@ rte_eal_hugepage_init(void)
+ 			return -1;
+ 		}
+ 
+-		addr = mmap(NULL, mem_sz, PROT_READ | PROT_WRITE,
++		addr = mmap(NULL, mem_sz, EAL_PROT_RW,
+ 				MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+ 		if (addr == MAP_FAILED) {
+ 			EAL_LOG(ERR, "%s: mmap() failed: %s", __func__,
+@@ -185,7 +198,7 @@ rte_eal_hugepage_init(void)
+ 			/* address is already mapped in memseg list, so using
+ 			 * MAP_FIXED here is safe.
+ 			 */
+-			addr = mmap(addr, page_sz, PROT_READ|PROT_WRITE,
++			addr = mmap(addr, page_sz, EAL_PROT_RW,
+ 					MAP_SHARED | MAP_FIXED,
+ 					hpi->lock_descriptor,
+ 					j * EAL_PAGE_SIZE);
+@@ -238,7 +251,7 @@ attach_segment(const struct rte_memseg_list *msl, const struct rte_memseg *ms,
+ 	if (msl->external)
+ 		return 0;
+ 
+-	addr = mmap(ms->addr, ms->len, PROT_READ | PROT_WRITE,
++	addr = mmap(ms->addr, ms->len, EAL_PROT_RW,
+ 			MAP_SHARED | MAP_FIXED, wa->fd_hugepage,
+ 			wa->seg_idx * EAL_PAGE_SIZE);
+ 	if (addr == MAP_FAILED || addr != ms->addr)
+diff --git a/dpdk/lib/eal/freebsd/include/rte_os.h b/dpdk/lib/eal/freebsd/include/rte_os.h
+index 576b786c..b9271422 100644
+--- a/dpdk/lib/eal/freebsd/include/rte_os.h
++++ b/dpdk/lib/eal/freebsd/include/rte_os.h
+@@ -73,7 +73,7 @@ typedef cpuset_t rte_cpuset_t;
+ 	CPU_COPY(&tmp, dst); \
+ } while (0)
+ #else
+-if __FreeBSD_version >= 1301000
++#if __FreeBSD_version >= 1301000
+ #define RTE_CPU_NOT(dst, src) do \
+ { \
+ 	cpuset_t tmp; \
+diff --git a/dpdk/lib/eal/include/rte_memory.h b/dpdk/lib/eal/include/rte_memory.h
+index dbd0a6be..ed8310d9 100644
+--- a/dpdk/lib/eal/include/rte_memory.h
++++ b/dpdk/lib/eal/include/rte_memory.h
+@@ -58,7 +58,11 @@ struct rte_memseg {
+ 	uint32_t nchannel;          /**< Number of channels. */
+ 	uint32_t nrank;             /**< Number of ranks. */
+ 	uint32_t flags;             /**< Memseg-specific flags */
+-} __rte_packed;
++}
++#ifndef __CHERI_PURE_CAPABILITY__
++__rte_packed
++#endif
++;
+ 
+ /**
+  * memseg list is a special case as we need to store a bunch of other data
+diff --git a/dpdk/lib/eal/include/rte_memzone.h b/dpdk/lib/eal/include/rte_memzone.h
+index e1563994..b1480ea4 100644
+--- a/dpdk/lib/eal/include/rte_memzone.h
++++ b/dpdk/lib/eal/include/rte_memzone.h
+@@ -62,7 +62,11 @@ struct rte_memzone {
+ 	int32_t socket_id;                /**< NUMA socket ID. */
+ 
+ 	uint32_t flags;                   /**< Characteristics of this memzone. */
+-} __rte_packed;
++}
++#ifndef __CHERI_PURE_CAPABILITY__
++__rte_packed
++#endif
++;
+ 
+ /**
+  * Set the maximum number of memzones.
+diff --git a/dpdk/lib/eal/unix/eal_unix_memory.c b/dpdk/lib/eal/unix/eal_unix_memory.c
+index 4fd066a2..91a7ef37 100644
+--- a/dpdk/lib/eal/unix/eal_unix_memory.c
++++ b/dpdk/lib/eal/unix/eal_unix_memory.c
+@@ -68,7 +68,18 @@ eal_mem_reserve(void *requested_addr, size_t size, int flags)
+ 	if (flags & EAL_RESERVE_FORCE_ADDRESS)
+ 		sys_flags |= MAP_FIXED;
+ 
++#ifdef __CHERI_PURE_CAPABILITY__
++	/*
++	 * CheriBSD reservations record their maximum protections. A PROT_NONE
++	 * reservation therefore refuses a later MAP_FIXED read-write remap with
++	 * EPROT, which is how EAL maps rte_config and the fbarrays over the space
++	 * it reserves. Declare the eventual permissions up front.
++	 */
++	return mem_map(requested_addr, size,
++		PROT_NONE | PROT_MAX(PROT_READ | PROT_WRITE), sys_flags, -1, 0);
++#else
+ 	return mem_map(requested_addr, size, PROT_NONE, sys_flags, -1, 0);
++#endif
+ }
+ 
+ void
+diff --git a/dpdk/lib/hash/rte_cmp_arm64.h b/dpdk/lib/hash/rte_cmp_arm64.h
+index a3e85635..1e44a2ae 100644
+--- a/dpdk/lib/hash/rte_cmp_arm64.h
++++ b/dpdk/lib/hash/rte_cmp_arm64.h
+@@ -10,12 +10,12 @@ rte_hash_k16_cmp_eq(const void *key1, const void *key2,
+ 	uint64_t x0, x1, y0, y1;
+ 
+ 	asm volatile(
+-		"ldp %x[x1], %x[x0], [%x[p1]]"
++		"ldp %x[x1], %x[x0], [%[p1]]"
+ 		: [x1]"=r"(x1), [x0]"=r"(x0)
+ 		: [p1]"r"(key1)
+ 		);
+ 	asm volatile(
+-		"ldp %x[y1], %x[y0], [%x[p2]]"
++		"ldp %x[y1], %x[y0], [%[p2]]"
+ 		: [y1]"=r"(y1), [y0]"=r"(y0)
+ 		: [p2]"r"(key2)
+ 		);
+diff --git a/dpdk/lib/net/rte_l2tpv2.h b/dpdk/lib/net/rte_l2tpv2.h
+index ac166578..a694553c 100644
+--- a/dpdk/lib/net/rte_l2tpv2.h
++++ b/dpdk/lib/net/rte_l2tpv2.h
+@@ -133,7 +133,11 @@ struct rte_l2tpv2_msg_with_all_options {
+ 	rte_be16_t nr;			/**< Nr(16) */
+ 	rte_be16_t offset_size;		/**< offset size(16) */
+ 	uint8_t   *offset_padding;	/**< offset padding(variable length) */
+-} __rte_packed;
++}
++#ifndef __CHERI_PURE_CAPABILITY__
++__rte_packed
++#endif
++;
+ 
+ /**
+  * L2TPv2 message Header contains all options except length(ns, nr,
+@@ -146,7 +150,11 @@ struct rte_l2tpv2_msg_without_length {
+ 	rte_be16_t nr;			/**< Nr(16) */
+ 	rte_be16_t offset_size;		/**< offset size(16) */
+ 	uint8_t   *offset_padding;	/**< offset padding(variable length) */
+-} __rte_packed;
++}
++#ifndef __CHERI_PURE_CAPABILITY__
++__rte_packed
++#endif
++;
+ 
+ /**
+  * L2TPv2 message Header contains all options except ns_nr(length,
+@@ -181,7 +189,11 @@ struct rte_l2tpv2_msg_with_offset {
+ 	rte_be16_t session_id;		/**< session ID(16) */
+ 	rte_be16_t offset_size;		/**< offset size(16) */
+ 	uint8_t   *offset_padding;	/**< offset padding(variable length) */
+-} __rte_packed;
++}
++#ifndef __CHERI_PURE_CAPABILITY__
++__rte_packed
++#endif
++;
+ 
+ /**
+  * L2TPv2 message Header contains options ns and nr.
+@@ -233,6 +245,10 @@ struct rte_l2tpv2_combined_msg_hdr {
+ 		/** header without all options */
+ 		struct rte_l2tpv2_msg_without_all_options type7;
+ 	};
+-} __rte_packed;
++}
++#ifndef __CHERI_PURE_CAPABILITY__
++__rte_packed
++#endif
++;
+ 
+ #endif /* _RTE_L2TPV2_H_ */
+diff --git a/dpdk/lib/stack/rte_stack.c b/dpdk/lib/stack/rte_stack.c
+index 7261281d..8482793a 100644
+--- a/dpdk/lib/stack/rte_stack.c
++++ b/dpdk/lib/stack/rte_stack.c
+@@ -62,8 +62,10 @@ rte_stack_create(const char *name, unsigned int count, int socket_id,
+ 	}
+ 
+ #ifdef RTE_ARCH_64
++#ifndef __CHERI_PURE_CAPABILITY__
+ 	RTE_BUILD_BUG_ON(sizeof(struct rte_stack_lf_head) != 16);
+ #endif
++#endif
+ #if !defined(RTE_STACK_LF_SUPPORTED)
+ 	if (flags & RTE_STACK_F_LF) {
+ 		STACK_LOG_ERR("Lock-free stack is not supported on your platform");
+diff --git a/freebsd/arm64/include/pcpu.h b/freebsd/arm64/include/pcpu.h
+index ce2894a9..b9fdefc1 100644
+--- a/freebsd/arm64/include/pcpu.h
++++ b/freebsd/arm64/include/pcpu.h
+@@ -57,7 +57,11 @@ struct debug_monitor_state;
+ struct pcb;
+ struct pcpu;
+ 
++#ifndef FSTACK
++/* F-Stack runs this in userspace and supplies its own __thread pcpup;
++   the kernel pins pcpup to x18, which conflicts with that decl. */
+ register struct pcpu *pcpup __asm ("x18");
++#endif
+ 
+ static inline struct pcpu *
+ get_pcpu(void)
+diff --git a/freebsd/arm64/include/pcpu_aux.h b/freebsd/arm64/include/pcpu_aux.h
+index 88a6f3eb..1c08f1b7 100644
+--- a/freebsd/arm64/include/pcpu_aux.h
++++ b/freebsd/arm64/include/pcpu_aux.h
+@@ -47,7 +47,12 @@
+  * To minimize memory waste in per-cpu UMA zones, the page size should
+  * be a multiple of the size of struct pcpu.
+  */
++#ifndef FSTACK
++/* The kernel packs pcpu structures into a page; F-Stack malloc()s a single
++   struct pcpu per worker, so page divisibility does not apply. Under
++   purecap the struct grows past it anyway (pointers are 16 bytes). */
+ _Static_assert(PAGE_SIZE % sizeof(struct pcpu) == 0, "fix pcpu size");
++#endif
+ 
+ extern struct pcpu pcpu0;
+ 
+diff --git a/freebsd/contrib/ck/include/ck_md.h b/freebsd/contrib/ck/include/ck_md.h
+index 51649597..5836cb86 100644
+--- a/freebsd/contrib/ck/include/ck_md.h
++++ b/freebsd/contrib/ck/include/ck_md.h
+@@ -125,6 +125,12 @@ net $
+ #define CK_MD_RMO
+ #endif
+ 
++#ifndef __CHERI_PURE_CAPABILITY__
++#define	CK_MD_ATOMIC_PTR_CONSTR	"r"
++#else
++#define	CK_MD_ATOMIC_PTR_CONSTR	"C"
++#endif
++
+ #define CK_VERSION "0.7.0"
+ #define CK_GIT_SHA "db5db44"
+ 
+diff --git a/freebsd/contrib/ck/include/gcc/aarch64/ck_pr.h b/freebsd/contrib/ck/include/gcc/aarch64/ck_pr.h
+index 3d269a50..4836215e 100644
+--- a/freebsd/contrib/ck/include/gcc/aarch64/ck_pr.h
++++ b/freebsd/contrib/ck/include/gcc/aarch64/ck_pr.h
+@@ -94,7 +94,7 @@ CK_PR_FENCE(unlock, CK_DMB_SY)
+ 		long r = 0;					\
+ 		__asm__ __volatile__(I " %w0, [%1]\n"		\
+ 					: "=r" (r)		\
+-					: "r"  (target)		\
++					: CK_MD_ATOMIC_PTR_CONSTR (target)	\
+ 					: "memory");		\
+ 		return ((T)r);					\
+ 	}
+@@ -105,13 +105,26 @@ CK_PR_FENCE(unlock, CK_DMB_SY)
+ 		long r = 0;					\
+ 		__asm__ __volatile__(I " %0, [%1]\n"		\
+ 					: "=r" (r)		\
+-					: "r"  (target)		\
++					: CK_MD_ATOMIC_PTR_CONSTR (target)	\
+ 					: "memory");		\
+ 		return ((T)r);					\
+ 	}
+ 
+ 
++#ifdef __CHERI_PURE_CAPABILITY__
++CK_CC_INLINE static void *
++ck_pr_md_load_ptr(const void *target)
++{
++	void *r = NULL;
++	__asm__ __volatile__("ldr %0, [%1]"
++				: "=C" (r)
++				: "C" (target)
++				: "memory");
++	return (r);
++}
++#else
+ CK_PR_LOAD_64(ptr, void, void *, "ldr")
++#endif
+ 
+ #define CK_PR_LOAD_S(S, T, I) CK_PR_LOAD(S, T, T, I)
+ #define CK_PR_LOAD_S_64(S, T, I) CK_PR_LOAD_64(S, T, T, I)
+@@ -139,7 +152,7 @@ CK_PR_LOAD_S_64(double, double, "ldr")
+ 	{							\
+ 		__asm__ __volatile__(I " %w2, [%1]"		\
+ 					: "=m" (*(T *)target)	\
+-					: "r" (target),		\
++					: CK_MD_ATOMIC_PTR_CONSTR (target),	\
+ 					  "r" (v)		\
+ 					: "memory");		\
+ 		return;						\
+@@ -150,13 +163,25 @@ CK_PR_LOAD_S_64(double, double, "ldr")
+ 	{							\
+ 		__asm__ __volatile__(I " %2, [%1]"		\
+ 					: "=m" (*(T *)target)	\
+-					: "r" (target),		\
++					: CK_MD_ATOMIC_PTR_CONSTR (target),	\
+ 					  "r" (v)		\
+ 					: "memory");		\
+ 		return;						\
+ 	}
+ 
++#ifdef __CHERI_PURE_CAPABILITY__
++CK_CC_INLINE static void
++ck_pr_md_store_ptr(void *target, const void *v)
++{
++	__asm__ __volatile__("str %1, [%0]"
++				:
++				: "C" (target),
++				  "C" (v)
++				: "memory");
++}
++#else
+ CK_PR_STORE_64(ptr, void, const void *, "str")
++#endif
+ 
+ #define CK_PR_STORE_S(S, T, I) CK_PR_STORE(S, T, T, I)
+ #define CK_PR_STORE_S_64(S, T, I) CK_PR_STORE_64(S, T, T, I)
+@@ -201,12 +226,42 @@ CK_PR_STORE_S_64(double, double, "str")
+                                      "cbnz %w1, 1b\n"		\
+                                         : "=&r" (previous),	\
+                                           "=&r" (tmp)		\
+-                                        : "r"   (target)	\
++                                        : CK_MD_ATOMIC_PTR_CONSTR (target)	\
+                                         : "memory", "cc");	\
+                 return;						\
+         }
+ 
++#ifdef __CHERI_PURE_CAPABILITY__
++/*
++ * Negating a pointer value is weird. This should arguably not
++ * exist. In CHERI we create a NULL-derived capability with the
++ * cursor set to the negated the address value.
++ */
++CK_CC_INLINE static void
++ck_pr_neg_ptr(void *target)
++{
++        void *previous = NULL;
++        ptraddr_t tmp2;
++        int tmp1 = 0;
++
++        __asm__ __volatile__("1:"
++                             "ldxr %0, [%3];"
++                             "gcvalue %2, %0;"
++                             "mov %0, czr;"
++                             "neg %2, %2;"
++                             "scvalue %0, %2;"
++                             "stxr %w1, %0, [%3];"
++                             "cbnz %w1, 1b;"
++                             : "=&C" (previous),
++                               "=&r" (tmp1),
++                               "=&r" (tmp2)
++                             : "C" (target)
++                             : "memory", "cc");
++        return;
++}
++#else
+ CK_PR_NEG(ptr, void, void *, "", "")
++#endif
+ CK_PR_NEG(64, uint64_t, uint64_t, "", "")
+ 
+ #define CK_PR_NEG_S(S, T, W)					\
+diff --git a/freebsd/contrib/ck/include/gcc/aarch64/ck_pr_llsc.h b/freebsd/contrib/ck/include/gcc/aarch64/ck_pr_llsc.h
+index 6500d966..5a7827f8 100644
+--- a/freebsd/contrib/ck/include/gcc/aarch64/ck_pr_llsc.h
++++ b/freebsd/contrib/ck/include/gcc/aarch64/ck_pr_llsc.h
+@@ -32,6 +32,8 @@
+ #error Do not include this file directly, use ck_pr.h
+ #endif
+ 
++#include <ck_md.h>
++
+ CK_CC_INLINE static bool
+ ck_pr_cas_64_2_value(uint64_t target[2], uint64_t compare[2], uint64_t set[2], uint64_t value[2])
+ {
+@@ -51,12 +53,45 @@ ck_pr_cas_64_2_value(uint64_t target[2], uint64_t compare[2], uint64_t set[2], u
+                              "mov %w0, #1\n"
+                              "2:"
+                              : "=&r" (tmp1), "=&r" (tmp2), "=&r" (value[0]), "=&r" (value[1])
+-                             : "r" (target), "r" (compare[0]), "r" (compare[1]), "r" (set[0]), "r" (set[1])
++                             : CK_MD_ATOMIC_PTR_CONSTR (target),
++                              "r" (compare[0]), "r" (compare[1]), "r" (set[0]), "r" (set[1])
+                              : "cc", "memory");
+ 
+         return (tmp1);
+ }
+ 
++#ifdef __CHERI_PURE_CAPABILITY__
++CK_CC_INLINE static bool
++ck_pr_cas_ptr_2_value(void *target, void *compare, void *set, void *value)
++{
++        uintptr_t *cmpp = compare;
++        uintptr_t *setp = set;
++        uintptr_t *valuep = value;
++        void *tmp1, *tmp2;
++        int ret;
++
++        __asm__ __volatile__("1:"
++                             "ldxp %1, %2, [%5];"
++                             "mov %3, %1;"
++                             "mov %4, %2;"
++                             "mov %w0, #0;"
++                             "cmp %1, %6;"
++                             "b.ne 2f;"
++                             "cmp %2, %7;"
++                             "b.ne 2f;"
++                             "stxp %w0, %8, %9, [%5];"
++                             "cbnz %w0, 1b;"
++                             "mov %w0, #1;"
++                             "2:"
++                             : "=&r" (ret), "=&C" (tmp1), "=&C" (tmp2),
++                               "=&C" (valuep[0]), "=&C" (valuep[1])
++                             : "C" (target), "C" (cmpp[0]), "C" (cmpp[1]),
++                               "C" (setp[0]), "C" (setp[1])
++                             : "cc", "memory");
++
++        return (ret);
++}
++#else
+ CK_CC_INLINE static bool
+ ck_pr_cas_ptr_2_value(void *target, void *compare, void *set, void *value)
+ {
+@@ -65,6 +100,7 @@ ck_pr_cas_ptr_2_value(void *target, void *compare, void *set, void *value)
+                                    CK_CPP_CAST(uint64_t *, set),
+                                    CK_CPP_CAST(uint64_t *, value)));
+ }
++#endif
+ 
+ CK_CC_INLINE static bool
+ ck_pr_cas_64_2(uint64_t target[2], uint64_t compare[2], uint64_t set[2])
+@@ -83,11 +119,41 @@ ck_pr_cas_64_2(uint64_t target[2], uint64_t compare[2], uint64_t set[2])
+                              "mov %w0, #1\n"
+                              "2:"
+                              : "=&r" (tmp1), "=&r" (tmp2)
+-                             : "r" (target), "r" (compare[0]), "r" (compare[1]), "r" (set[0]), "r" (set[1])
++                             : CK_MD_ATOMIC_PTR_CONSTR (target), "r" (compare[0]),
++                               "r" (compare[1]), "r" (set[0]), "r" (set[1])
+                              : "cc", "memory");
+ 
+         return (tmp1);
+ }
++
++#ifdef __CHERI_PURE_CAPABILITY__
++CK_CC_INLINE static bool
++ck_pr_cas_ptr_2(void *target, void *compare, void *set)
++{
++        uintptr_t *cmpp = compare;
++        uintptr_t *setp = set;
++        void *tmp1, *tmp2;
++        int ret;
++
++        __asm__ __volatile__("1:"
++                             "ldxp %1, %2, [%3];"
++                             "mov %w0, #0;"
++                             "cmp %1, %4;"
++                             "b.ne 2f;"
++                             "cmp %2, %5;"
++                             "b.ne 2f;"
++                             "stxp %w0, %6, %7, [%3];"
++                             "cbnz %w0, 1b;"
++                             "mov %w0, #1;"
++                             "2:"
++                             : "=&r" (ret), "=&C" (tmp1), "=&C" (tmp2)
++                             : "C" (target), "C" (cmpp[0]), "C" (cmpp[1]),
++                               "C" (setp[0]), "C" (setp[1])
++                             : "cc", "memory");
++
++        return (ret);
++}
++#else
+ CK_CC_INLINE static bool
+ ck_pr_cas_ptr_2(void *target, void *compare, void *set)
+ {
+@@ -95,14 +161,15 @@ ck_pr_cas_ptr_2(void *target, void *compare, void *set)
+                              CK_CPP_CAST(uint64_t *, compare),
+                              CK_CPP_CAST(uint64_t *, set)));
+ }
++#endif
+ 
+ 
+-#define CK_PR_CAS(N, M, T, W, R)					\
++#define CK_PR_CAS(N, M, T, W, R, C)					\
+         CK_CC_INLINE static bool					\
+         ck_pr_cas_##N##_value(M *target, T compare, T set, M *value)	\
+         {								\
+                 T previous;						\
+-                T tmp;							\
++                int tmp;						\
+                 __asm__ __volatile__("1:\n"				\
+                                      "ldxr" W " %" R "0, [%2]\n"	\
+                                      "cmp  %" R "0, %" R "4\n"		\
+@@ -110,11 +177,11 @@ ck_pr_cas_ptr_2(void *target, void *compare, void *set)
+                                      "stxr" W " %w1, %" R "3, [%2]\n"	\
+                                      "cbnz %w1, 1b\n"			\
+                                      "2:"				\
+-                    : "=&r" (previous),					\
+-                    "=&r" (tmp)						\
+-                    : "r"   (target),					\
+-                    "r"   (set),					\
+-                    "r"   (compare)					\
++                    : "=&"C (previous),					\
++                      "=&r" (tmp)					\
++                    : CK_MD_ATOMIC_PTR_CONSTR (target),			\
++                      C (set),						\
++                      C (compare)					\
+                     : "memory", "cc");					\
+                 *(T *)value = previous;					\
+                 return (previous == compare);				\
+@@ -123,7 +190,7 @@ ck_pr_cas_ptr_2(void *target, void *compare, void *set)
+         ck_pr_cas_##N(M *target, T compare, T set)			\
+         {								\
+                 T previous;						\
+-                T tmp;							\
++                int tmp;						\
+                 __asm__ __volatile__(					\
+                                      "1:"				\
+                                      "ldxr" W " %" R "0, [%2]\n"	\
+@@ -132,18 +199,18 @@ ck_pr_cas_ptr_2(void *target, void *compare, void *set)
+                                      "stxr" W " %w1, %" R "3, [%2]\n"	\
+                                      "cbnz %w1, 1b\n"			\
+                                      "2:"				\
+-                    : "=&r" (previous),					\
+-                    "=&r" (tmp)						\
+-                    : "r"   (target),					\
+-                    "r"   (set),					\
+-                    "r"   (compare)					\
++                    : "=&"C (previous),					\
++                      "=&r" (tmp)					\
++                    : CK_MD_ATOMIC_PTR_CONSTR (target),			\
++                      C (set),						\
++                      C (compare)					\
+                     : "memory", "cc");					\
+                 return (previous == compare);				\
+         }
+ 
+-CK_PR_CAS(ptr, void, void *, "", "")
++CK_PR_CAS(ptr, void, void *, "", "", CK_MD_ATOMIC_PTR_CONSTR)
+ 
+-#define CK_PR_CAS_S(N, M, W, R)	CK_PR_CAS(N, M, M, W, R)
++#define CK_PR_CAS_S(N, M, W, R)	CK_PR_CAS(N, M, M, W, R, "r")
+ CK_PR_CAS_S(64, uint64_t, "", "")
+ #ifndef CK_PR_DISABLE_DOUBLE
+ CK_PR_CAS_S(double, double, "", "")
+@@ -160,66 +227,100 @@ CK_PR_CAS_S(char, char, "b", "w")
+ #undef CK_PR_CAS_S
+ #undef CK_PR_CAS
+ 
+-#define CK_PR_FAS(N, M, T, W, R)				\
++#define CK_PR_FAS(N, M, T, W, R, C)				\
+         CK_CC_INLINE static T					\
+         ck_pr_fas_##N(M *target, T v)				\
+         {							\
+                 T previous;					\
+-                T tmp;						\
++                int tmp;					\
+                 __asm__ __volatile__("1:"			\
+                                      "ldxr" W " %" R "0, [%2]\n"\
+                                      "stxr" W " %w1, %" R "3, [%2]\n"\
+                                      "cbnz %w1, 1b\n"		\
+-                                        : "=&r" (previous),	\
+-                                          "=&r" (tmp) 		\
+-                                        : "r"   (target),	\
+-                                          "r"   (v)		\
++                                        : "=&"C (previous),	\
++                                          "=&r" (tmp)		\
++                                        : CK_MD_ATOMIC_PTR_CONSTR (target),	\
++                                          C     (v)		\
+                                         : "memory", "cc");	\
+                 return (previous);				\
+         }
+ 
+-CK_PR_FAS(64, uint64_t, uint64_t, "", "")
+-CK_PR_FAS(32, uint32_t, uint32_t, "", "w")
+-CK_PR_FAS(ptr, void, void *, "", "")
+-CK_PR_FAS(int, int, int, "", "w")
+-CK_PR_FAS(uint, unsigned int, unsigned int, "", "w")
+-CK_PR_FAS(16, uint16_t, uint16_t, "h", "w")
+-CK_PR_FAS(8, uint8_t, uint8_t, "b", "w")
+-CK_PR_FAS(short, short, short, "h", "w")
+-CK_PR_FAS(char, char, char, "b", "w")
++#define CK_PR_FAS_REG(N, M, T, W, R) CK_PR_FAS(N, M, T, W, R, "r")
+ 
++CK_PR_FAS_REG(64, uint64_t, uint64_t, "", "")
++CK_PR_FAS_REG(32, uint32_t, uint32_t, "", "w")
++CK_PR_FAS(ptr, void, void *, "", "", CK_MD_ATOMIC_PTR_CONSTR)
++CK_PR_FAS_REG(int, int, int, "", "w")
++CK_PR_FAS_REG(uint, unsigned int, unsigned int, "", "w")
++CK_PR_FAS_REG(16, uint16_t, uint16_t, "h", "w")
++CK_PR_FAS_REG(8, uint8_t, uint8_t, "b", "w")
++CK_PR_FAS_REG(short, short, short, "h", "w")
++CK_PR_FAS_REG(char, char, char, "b", "w")
+ 
++#undef CK_PR_FAS_REG
+ #undef CK_PR_FAS
+ 
+-#define CK_PR_UNARY(O, N, M, T, I, W, R)			\
++#define CK_PR_UNARY(O, N, M, T, I, W, R, C)			\
+         CK_CC_INLINE static void				\
+         ck_pr_##O##_##N(M *target)				\
+         {							\
+                 T previous = 0;					\
+-                T tmp = 0;					\
++                int tmp = 0;					\
+                 __asm__ __volatile__("1:"			\
+                                      "ldxr" W " %" R "0, [%2]\n"\
+                                       I "\n"			\
+                                      "stxr" W " %w1, %" R "0, [%2]\n"	\
+                                      "cbnz %w1, 1b\n"		\
+-                                        : "=&r" (previous),	\
++                                        : "=&"C (previous),	\
+                                           "=&r" (tmp)		\
+-                                        : "r"   (target)	\
++                                        : CK_MD_ATOMIC_PTR_CONSTR (target)	\
+                                         : "memory", "cc");	\
+                 return;						\
+         }
+ 
+-CK_PR_UNARY(inc, ptr, void, void *, "add %0, %0, #1", "", "")
+-CK_PR_UNARY(dec, ptr, void, void *, "sub %0, %0, #1", "", "")
+-CK_PR_UNARY(not, ptr, void, void *, "mvn %0, %0", "", "")
+-CK_PR_UNARY(inc, 64, uint64_t, uint64_t, "add %0, %0, #1", "", "")
+-CK_PR_UNARY(dec, 64, uint64_t, uint64_t, "sub %0, %0, #1", "", "")
+-CK_PR_UNARY(not, 64, uint64_t, uint64_t, "mvn %0, %0", "", "")
++CK_PR_UNARY(inc, ptr, void, void *, "add %0, %0, #1", "", "",
++        CK_MD_ATOMIC_PTR_CONSTR)
++CK_PR_UNARY(dec, ptr, void, void *, "sub %0, %0, #1", "", "",
++        CK_MD_ATOMIC_PTR_CONSTR)
++#ifdef __CHERI_PURE_CAPABILITY__
++/*
++ * Bitwise NOT on a pointer value is weird. This should arguably not
++ * exist. In CHERI we create a NULL-derived capability with the
++ * cursor set to the bitwise NOT of the address value.
++ */
++CK_CC_INLINE static void
++ck_pr_not_ptr(void *target)
++{
++        void *previous = NULL;
++        ptraddr_t tmp2;
++        int tmp1 = 0;
++
++        __asm__ __volatile__("1:"
++                             "ldxr %0, [%3];"
++                             "gcvalue %2, %0;"
++                             "mov %0, czr;"
++                             "mvn %2, %2;"
++                             "scvalue %0, %2;"
++                             "stxr %w1, %0, [%3];"
++                             "cbnz %w1, 1b;"
++                             : "=&C" (previous),
++                               "=&r" (tmp1),
++                               "=&r" (tmp2)
++                             : "C" (target)
++                             : "memory", "cc");
++        return;
++}
++#else
++CK_PR_UNARY(not, ptr, void, void *, "mvn %0, %0", "", "", "r")
++#endif
++CK_PR_UNARY(inc, 64, uint64_t, uint64_t, "add %0, %0, #1", "", "", "r")
++CK_PR_UNARY(dec, 64, uint64_t, uint64_t, "sub %0, %0, #1", "", "", "r")
++CK_PR_UNARY(not, 64, uint64_t, uint64_t, "mvn %0, %0", "", "", "r")
+ 
+ #define CK_PR_UNARY_S(S, T, W)					\
+-        CK_PR_UNARY(inc, S, T, T, "add %w0, %w0, #1", W, "w")	\
+-        CK_PR_UNARY(dec, S, T, T, "sub %w0, %w0, #1", W, "w")	\
+-        CK_PR_UNARY(not, S, T, T, "mvn %w0, %w0", W, "w")	\
++        CK_PR_UNARY(inc, S, T, T, "add %w0, %w0, #1", W, "w", "r")	\
++        CK_PR_UNARY(dec, S, T, T, "sub %w0, %w0, #1", W, "w", "r")	\
++        CK_PR_UNARY(not, S, T, T, "mvn %w0, %w0", W, "w", "r")	\
+ 
+ CK_PR_UNARY_S(32, uint32_t, "")
+ CK_PR_UNARY_S(uint, unsigned int, "")
+@@ -237,7 +338,7 @@ CK_PR_UNARY_S(char, char, "b")
+         ck_pr_##O##_##N(M *target, T delta)			\
+         {							\
+                 T previous;					\
+-                T tmp;						\
++                int tmp;					\
+                 __asm__ __volatile__("1:"			\
+                                      "ldxr" W " %" R "0, [%2]\n"\
+                                       I " %" R "0, %" R "0, %" R "3\n"	\
+@@ -245,17 +346,48 @@ CK_PR_UNARY_S(char, char, "b")
+                                      "cbnz %w1, 1b\n"		\
+                                         : "=&r" (previous),	\
+                                           "=&r" (tmp)		\
+-                                        : "r"   (target),	\
+-                                          "r"   (delta)		\
++                                        : CK_MD_ATOMIC_PTR_CONSTR (target),	\
++                                          "r" (delta)		\
+                                         : "memory", "cc");	\
+                 return;						\
+         }
+ 
+-CK_PR_BINARY(and, ptr, void, uintptr_t, "and", "", "")
+-CK_PR_BINARY(add, ptr, void, uintptr_t, "add", "", "")
+-CK_PR_BINARY(or, ptr, void, uintptr_t, "orr", "", "")
+-CK_PR_BINARY(sub, ptr, void, uintptr_t, "sub", "", "")
+-CK_PR_BINARY(xor, ptr, void, uintptr_t, "eor", "", "")
++#ifdef __CHERI_PURE_CAPABILITY__
++#define CK_PR_BINARY_PTR(O, M, T, I, W, R)			\
++        CK_CC_INLINE static void				\
++        ck_pr_##O##_ptr(void *target, uintptr_t delta)		\
++        {							\
++                uintptr_t previous;				\
++                ptraddr_t tmp1, tmp2;				\
++                int res;					\
++                __asm__ __volatile__("1:"			\
++                                     "ldxr %0, [%4];"		\
++                                     "gcvalue %2, %0;"		\
++                                     "gcvalue %3, %5;"		\
++                                     I " %2, %2, %3;"		\
++                                     "scvalue %0, %2;"		\
++                                     "stxr %w1, %0, [%4];"	\
++                                     "cbnz %w1, 1b;"		\
++                                        : "=&C" (previous),	\
++                                          "=&r" (res),		\
++                                          "=&r" (tmp1),		\
++                                          "=&r" (tmp2)		\
++                                        : "C" (target),		\
++                                          "C" (delta)		\
++                                        : "memory", "cc");	\
++                return;						\
++}
++#else
++#define CK_PR_BINARY_PTR(O, M, T, I, W, R)			\
++        CK_PR_BINARY(O, ptr, M, T, I, W, R)
++#endif
++
++CK_PR_BINARY_PTR(and, void, uintptr_t, "and", "", "")
++CK_PR_BINARY_PTR(add, void, uintptr_t, "add", "", "")
++CK_PR_BINARY_PTR(or, void, uintptr_t, "orr", "", "")
++CK_PR_BINARY_PTR(sub, void, uintptr_t, "sub", "", "")
++CK_PR_BINARY_PTR(xor, void, uintptr_t, "eor", "", "")
++
+ CK_PR_BINARY(and, 64, uint64_t, uint64_t, "and", "", "")
+ CK_PR_BINARY(add, 64, uint64_t, uint64_t, "add", "", "")
+ CK_PR_BINARY(or, 64, uint64_t, uint64_t, "orr", "", "")
+@@ -277,24 +409,26 @@ CK_PR_BINARY_S(8, uint8_t, "b")
+ CK_PR_BINARY_S(short, short, "h")
+ CK_PR_BINARY_S(char, char, "b")
+ 
++#undef CK_PR_BINARY_PTR
+ #undef CK_PR_BINARY_S
+ #undef CK_PR_BINARY
+ 
+ CK_CC_INLINE static void *
+ ck_pr_faa_ptr(void *target, uintptr_t delta)
+ {
+-        uintptr_t previous, r, tmp;
++        uintptr_t previous, r;
++        int tmp;
+ 
+         __asm__ __volatile__("1:"
+                              "ldxr %0, [%3]\n"
+                              "add %1, %4, %0\n"
+                              "stxr %w2, %1, [%3]\n"
+                              "cbnz %w2, 1b\n"
+-                                : "=&r" (previous),
+-                                  "=&r" (r),
++                                : "=&" CK_MD_ATOMIC_PTR_CONSTR (previous),
++                                  "=&" CK_MD_ATOMIC_PTR_CONSTR (r),
+                                   "=&r" (tmp)
+-                                : "r"   (target),
+-                                  "r"   (delta)
++                                : CK_MD_ATOMIC_PTR_CONSTR (target),
++                                  CK_MD_ATOMIC_PTR_CONSTR (delta)
+                                 : "memory", "cc");
+ 
+         return (void *)(previous);
+@@ -313,7 +447,7 @@ ck_pr_faa_64(uint64_t *target, uint64_t delta)
+                                 : "=&r" (previous),
+                                   "=&r" (r),
+                                   "=&r" (tmp)
+-                                : "r"   (target),
++                                : CK_MD_ATOMIC_PTR_CONSTR (target),
+                                   "r"   (delta)
+                                 : "memory", "cc");
+ 
+@@ -333,7 +467,7 @@ ck_pr_faa_64(uint64_t *target, uint64_t delta)
+                                         : "=&r" (previous),		\
+                                           "=&r" (r),			\
+                                           "=&r" (tmp)			\
+-                                        : "r"   (target),		\
++                                        : CK_MD_ATOMIC_PTR_CONSTR (target),	\
+                                           "r"   (delta)			\
+                                         : "memory", "cc");		\
+                 return (previous);					\
+diff --git a/freebsd/contrib/ck/include/gcc/ck_cc.h b/freebsd/contrib/ck/include/gcc/ck_cc.h
+index 0a6d17b9..cb547f81 100644
+--- a/freebsd/contrib/ck/include/gcc/ck_cc.h
++++ b/freebsd/contrib/ck/include/gcc/ck_cc.h
+@@ -69,7 +69,9 @@
+ /*
+  * Packed attribute.
+  */
++#ifndef __CHERI_PURE_CAPABILITY__
+ #define CK_CC_PACKED __attribute__((packed))
++#endif
+ 
+ /*
+  * Weak reference.
+diff --git a/freebsd/kern/init_main.c b/freebsd/kern/init_main.c
+index 87ffdb8d..9bc448e4 100644
+--- a/freebsd/kern/init_main.c
++++ b/freebsd/kern/init_main.c
+@@ -312,6 +312,8 @@ mi_startup(void)
+ 		}
+ #endif
+ 
++		printf("FFTRACE sysinit sub=%x order=%x func=%p\n",
++		    sip->subsystem, sip->order, (void *)sip->func);
+ 		/* Call function */
+ 		(*(sip->func))(sip->udata);
+ 
+diff --git a/freebsd/kern/link_elf.c b/freebsd/kern/link_elf.c
+index af582f75..0959a754 100644
+--- a/freebsd/kern/link_elf.c
++++ b/freebsd/kern/link_elf.c
+@@ -456,7 +456,20 @@ link_elf_init(void* arg)
+ 
+ 	linker_add_class(&link_elf_class);
+ 
++#ifdef __CHERI_PURE_CAPABILITY__
++	/*
++	 * parse_dynamic()/link_elf_preload_parse_symbols() build pointers out of
++	 * ELF address integers (symtab, strtab, hash). Under purecap an integer
++	 * cannot be turned into a valid pointer, so those come back untagged and
++	 * fault on first dereference. This is the runtime kernel-module linker;
++	 * F-Stack is statically linked and never kldloads, so skip the dynamic
++	 * parse and keep only the linker_file bookkeeping that module
++	 * registration attaches to. Cost: no kernel symbol lookup (DDB/kldsym).
++	 */
++	dp = NULL;
++#else
+ 	dp = (Elf_Dyn *)&_DYNAMIC;
++#endif
+ 	modname = (char *)preload_search_info(preload_kmdp, MODINFO_NAME);
+ 	if (modname == NULL)
+ 		modname = "kernel";
+diff --git a/freebsd/kern/uipc_mbuf.c b/freebsd/kern/uipc_mbuf.c
+index d86eab12..a4c40721 100644
+--- a/freebsd/kern/uipc_mbuf.c
++++ b/freebsd/kern/uipc_mbuf.c
+@@ -203,7 +203,14 @@ CTASSERT(offsetof(struct mbuf, m_pktdat) % 8 == 0);
+  * NB: Possibly they should be documented there via #define's and not just
+  * comments.
+  */
+-#if defined(__LP64__)
++#if defined(__CHERI_PURE_CAPABILITY__)
++/*
++ * CHERI purecap: capabilities are 16 bytes, so struct mbuf, pkthdr and m_ext
++ * all grow past the sizes recorded below for 8-byte pointers; MSIZE was raised
++ * to 512 to match. These are layout documentation and regression guards, not
++ * correctness requirements, so there is nothing to assert here.
++ */
++#elif defined(__LP64__)
+ CTASSERT(offsetof(struct mbuf, m_dat) == 32);
+ CTASSERT(sizeof(struct pkthdr) == 64);
+ CTASSERT(sizeof(struct m_ext) == 160);
+diff --git a/freebsd/net/if_gif.c b/freebsd/net/if_gif.c
+index 272ab214..7741391d 100644
+--- a/freebsd/net/if_gif.c
++++ b/freebsd/net/if_gif.c
+@@ -207,11 +207,15 @@ vnet_gif_init(const void *unused __unused)
+ 	V_gif_cloner = if_clone_simple(gifname, gif_clone_create,
+ 	    gif_clone_destroy, 0);
+ #ifdef INET
++#ifndef __CHERI_PURE_CAPABILITY__
+ 	in_gif_init();
+ #endif
++#endif
+ #ifdef INET6
++#ifndef __CHERI_PURE_CAPABILITY__
+ 	in6_gif_init();
+ #endif
++#endif
+ }
+ VNET_SYSINIT(vnet_gif_init, SI_SUB_PSEUDO, SI_ORDER_ANY,
+     vnet_gif_init, NULL);
+diff --git a/freebsd/net/pfvar.h b/freebsd/net/pfvar.h
+index 7e030910..3cffb5f7 100644
+--- a/freebsd/net/pfvar.h
++++ b/freebsd/net/pfvar.h
+@@ -1145,7 +1145,10 @@ struct pf_kstate {
+  * 6 cache lines per struct, 10 structs per page.
+  * Try to not grow the struct beyond that.
+  */
++#ifndef FSTACK
++/* size budget for 8-byte pointers; purecap capabilities are 16 bytes */
+ _Static_assert(sizeof(struct pf_kstate) <= 384, "pf_kstate size crosses 384 bytes");
++#endif
+ 
+ enum pf_test_status {
+ 	PF_TEST_FAIL = -1,
+diff --git a/freebsd/net/route/nhop_ctl.c b/freebsd/net/route/nhop_ctl.c
+index 0c028c7a..d0a5b2a7 100644
+--- a/freebsd/net/route/nhop_ctl.c
++++ b/freebsd/net/route/nhop_ctl.c
+@@ -94,8 +94,11 @@ static void destroy_nhop(struct nhop_object *nh);
+ 
+ _Static_assert(__offsetof(struct nhop_object, nh_ifp) == 32,
+     "nhop_object: wrong nh_ifp offset");
++#ifndef FSTACK
++/* cache-line budget for 8-byte pointers; purecap capabilities are 16 bytes so the struct grows */
+ _Static_assert(sizeof(struct nhop_object) <= 128,
+     "nhop_object: size exceeds 128 bytes");
++#endif
+ 
+ static uma_zone_t nhops_zone;	/* Global zone for each and every nexthop */
+ 
+diff --git a/freebsd/net/vnet.c b/freebsd/net/vnet.c
+index a2b82705..18000489 100644
+--- a/freebsd/net/vnet.c
++++ b/freebsd/net/vnet.c
+@@ -257,7 +257,12 @@ vnet_alloc(void)
+ 	 * from the base memory pointer, so pre-calculate that now to avoid
+ 	 * it on each use.
+ 	 */
++#ifdef __CHERI_PURE_CAPABILITY__
++	/* Keep the allocation capability; _VNET_PTR adds the in-set offset. */
++	vnet->vnet_data_base = (uintptr_t)vnet->vnet_data_mem;
++#else
+ 	vnet->vnet_data_base = (uintptr_t)vnet->vnet_data_mem - VNET_START;
++#endif
+ 
+ 	/* Initialize / attach vnet module instances. */
+ 	CURVNET_SET_QUIET(vnet);
+@@ -472,8 +477,17 @@ vnet_data_copy(void *start, int size)
+ 
+ 	VNET_LIST_RLOCK();
+ 	LIST_FOREACH(vnet, &vnet_head, vnet_le)
++#ifdef __CHERI_PURE_CAPABILITY__
++		/* vnet_data_base is the allocation capability; add the in-set
++		 * offset so the destination stays within its bounds. */
++		memcpy((char *)vnet->vnet_data_base +
++		    ((unsigned long)__builtin_cheri_address_get(start) -
++		     (unsigned long)__builtin_cheri_address_get(
++			(const void *)&__start_set_vnet)), start, size);
++#else
+ 		memcpy((void *)((uintptr_t)vnet->vnet_data_base +
+ 		    (uintptr_t)start), start, size);
++#endif
+ 	VNET_LIST_RUNLOCK();
+ }
+ 
+@@ -486,8 +500,15 @@ vnet_save_init(void *start, size_t size)
+ 	MPASS(vnet_init_var != 0);
+ 	MPASS(VNET_START <= (uintptr_t)start &&
+ 	    (uintptr_t)start + size <= VNET_STOP);
++#ifdef __CHERI_PURE_CAPABILITY__
++	/* Provenance must come from vnet_init_var, not the offset. */
++	memcpy((char *)vnet_init_var + ((unsigned long)__builtin_cheri_address_get(start) -
++	     (unsigned long)__builtin_cheri_address_get((const void *)&__start_set_vnet)),
++	    start, size);
++#else
+ 	memcpy((void *)(vnet_init_var + ((uintptr_t)start - VNET_START)),
+ 	    start, size);
++#endif
+ }
+ 
+ /*
+@@ -500,8 +521,13 @@ vnet_restore_init(void *start, size_t size)
+ 	MPASS(vnet_init_var != 0);
+ 	MPASS(VNET_START <= (uintptr_t)start &&
+ 	    (uintptr_t)start + size <= VNET_STOP);
++#ifdef __CHERI_PURE_CAPABILITY__
++	memcpy(start, (char *)vnet_init_var + ((unsigned long)__builtin_cheri_address_get(start) -
++	     (unsigned long)__builtin_cheri_address_get((const void *)&__start_set_vnet)), size);
++#else
+ 	memcpy(start,
+ 	    (void *)(vnet_init_var + ((uintptr_t)start - VNET_START)), size);
++#endif
+ }
+ 
+ /*
+diff --git a/freebsd/net/vnet.h b/freebsd/net/vnet.h
+index 670e99a4..3a3234aa 100644
+--- a/freebsd/net/vnet.h
++++ b/freebsd/net/vnet.h
+@@ -290,8 +290,23 @@ extern struct sx vnet_sxlock;
+ #define	VNET_DEFINE_STATIC(t, n) \
+     static t VNET_NAME(n) __section(VNET_SETNAME) __used
+ #endif
++#ifdef __CHERI_PURE_CAPABILITY__
++/*
++ * vnet_data_base holds the allocation capability itself (see vnet_alloc).
++ * Add the variable offset within set_vnet as an integer so provenance comes
++ * from the allocation and the value never leaves its bounds. Adding two
++ * uintcaps, as below, lets an untagged base supply provenance instead.
++ */
++#define	_VNET_PTR(b, n)		(__typeof(VNET_NAME(n))*)		\
++				    ((char *)(b) +			\
++				     ((unsigned long)__builtin_cheri_address_get(	\
++					(const void *)&VNET_NAME(n)) -		\
++				      (unsigned long)__builtin_cheri_address_get(	\
++					(const void *)&__start_set_vnet)))
++#else
+ #define	_VNET_PTR(b, n)		(__typeof(VNET_NAME(n))*)		\
+ 				    ((b) + (uintptr_t)&VNET_NAME(n))
++#endif
+ 
+ #define	_VNET(b, n)		(*_VNET_PTR(b, n))
+ 
+diff --git a/freebsd/netgraph/ng_eiface.c b/freebsd/netgraph/ng_eiface.c
+index 4598291f..2b041401 100644
+--- a/freebsd/netgraph/ng_eiface.c
++++ b/freebsd/netgraph/ng_eiface.c
+@@ -665,6 +665,7 @@ ng_eiface_mod_event(module_t mod, int event, void *data)
+ static void
+ vnet_ng_eiface_init(const void *unused)
+ {
++	printf("VTRACE enter vnet_ng_eiface_init\n");
+ 
+ 	V_ng_eiface_unit = new_unrhdr(0, 0xffff, NULL);
+ }
+diff --git a/freebsd/netgraph/ng_ether.c b/freebsd/netgraph/ng_ether.c
+index 80a0d341..e57c9dd6 100644
+--- a/freebsd/netgraph/ng_ether.c
++++ b/freebsd/netgraph/ng_ether.c
+@@ -860,6 +860,7 @@ ng_ether_mod_event(module_t mod, int event, void *data)
+ static void
+ vnet_ng_ether_init(const void *unused)
+ {
++	printf("VTRACE enter vnet_ng_ether_init\n");
+ 	struct ifnet *ifp;
+ 
+ 	/* If module load was rejected, don't attach to vnets. */
+diff --git a/freebsd/netgraph/ng_iface.c b/freebsd/netgraph/ng_iface.c
+index fbe89e13..cb057967 100644
+--- a/freebsd/netgraph/ng_iface.c
++++ b/freebsd/netgraph/ng_iface.c
+@@ -796,6 +796,7 @@ ng_iface_mod_event(module_t mod, int event, void *data)
+ static void
+ vnet_ng_iface_init(const void *unused)
+ {
++	printf("VTRACE enter vnet_ng_iface_init\n");
+ 
+ 	V_ng_iface_unit = new_unrhdr(0, 0xffff, NULL);
+ }
+diff --git a/freebsd/sys/_pv_entry.h b/freebsd/sys/_pv_entry.h
+index ec3ea24a..95d20b88 100644
+--- a/freebsd/sys/_pv_entry.h
++++ b/freebsd/sys/_pv_entry.h
+@@ -104,8 +104,12 @@ struct pv_chunk {
+ 	unsigned long		pc_pad[_NPAD];
+ };
+ 
++#ifndef FSTACK
++/* Kernel VM invariant: a PV chunk is exactly one page. F-Stack does no
++   pmap work, and purecap pointers grow the struct past a page. */
+ _Static_assert(sizeof(struct pv_chunk) == PAGE_SIZE,
+     "PV entry chunk size mismatch");
++#endif
+ 
+ #ifdef _KERNEL
+ static __inline bool
+diff --git a/freebsd/sys/_types.h b/freebsd/sys/_types.h
+index fe345b43..8882e473 100644
+--- a/freebsd/sys/_types.h
++++ b/freebsd/sys/_types.h
+@@ -74,6 +74,20 @@ typedef	__uint64_t	__uintptr_t;
+ typedef	__uint64_t	__uintfptr_t;
+ typedef	__uint64_t	__vm_offset_t;
+ typedef	__uint64_t	__vm_size_t;
++#elif __SIZEOF_POINTER__ == 16
++/*
++ * CHERI purecap. uintptr_t must be the capability integer type: code that
++ * round-trips a pointer through it has to keep provenance, or the value comes
++ * back untagged and traps on dereference. vm_offset_t/vm_size_t stay plain
++ * 64-bit quantities -- they are addresses and sizes, not references.
++ */
++typedef	__uint64_t	__ptraddr_t;
++typedef	__intcap_t	__intptr_t;
++typedef	__intcap_t	__intfptr_t;
++typedef	__uintcap_t	__uintptr_t;
++typedef	__uintcap_t	__uintfptr_t;
++typedef	__uint64_t	__vm_offset_t;
++typedef	__uint64_t	__vm_size_t;
+ #elif __SIZEOF_POINTER__ == 4
+ typedef	__int32_t	__intptr_t;
+ typedef	__int32_t	__intfptr_t;
+diff --git a/freebsd/sys/atomic_common.h b/freebsd/sys/atomic_common.h
+index e802b2a9..336585cc 100644
+--- a/freebsd/sys/atomic_common.h
++++ b/freebsd/sys/atomic_common.h
+@@ -102,7 +102,9 @@
+ #define	atomic_load_8(p)	__atomic_load_generic(p, int8_t, uint8_t, 8)
+ #define	atomic_load_16(p)	__atomic_load_generic(p, int16_t, uint16_t, 16)
+ #define	atomic_load_32(p)	__atomic_load_generic(p, int32_t, uint32_t, 32)
+-#ifdef __LP64__
++/* __LP64__ is used here as a proxy for native 64-bit atomics. CHERI purecap
++   is a 64-bit platform with native 64-bit atomics but is not LP64. */
++#if defined(__LP64__) || defined(__CHERI_PURE_CAPABILITY__)
+ #define	atomic_load_64(p)	__atomic_load_generic(p, int64_t, uint64_t, 64)
+ #endif
+ #define	atomic_store_char(p, v)			\
+@@ -119,7 +121,9 @@
+ 	__atomic_store_generic(p, v, int16_t, uint16_t, 16)
+ #define	atomic_store_32(p, v)			\
+ 	__atomic_store_generic(p, v, int32_t, uint32_t, 32)
+-#ifdef __LP64__
++/* __LP64__ is used here as a proxy for native 64-bit atomics. CHERI purecap
++   is a 64-bit platform with native 64-bit atomics but is not LP64. */
++#if defined(__LP64__) || defined(__CHERI_PURE_CAPABILITY__)
+ #define	atomic_store_64(p, v)			\
+ 	__atomic_store_generic(p, v, int64_t, uint64_t, 64)
+ #endif
+diff --git a/freebsd/sys/param.h b/freebsd/sys/param.h
+index 78818bf0..fdc7c7ec 100644
+--- a/freebsd/sys/param.h
++++ b/freebsd/sys/param.h
+@@ -185,8 +185,15 @@
+  * MCLBYTES must be no larger than PAGE_SIZE.
+  */
+ #ifndef	MSIZE
++#ifdef __CHERI_PURE_CAPABILITY__
++/* struct mbuf is pointer-dense (m_next, m_nextpkt, m_data, m_ext...) and
++   capabilities are 16 bytes, so it no longer fits in 256 with any inline
++   data area left. Grow the mbuf rather than silencing the check. */
++#define	MSIZE		512		/* size of an mbuf */
++#else
+ #define	MSIZE		256		/* size of an mbuf */
+ #endif
++#endif
+ 
+ #ifndef	MCLSHIFT
+ #define MCLSHIFT	11		/* convert bytes to mbuf clusters */
+diff --git a/freebsd/sys/pcpu.h b/freebsd/sys/pcpu.h
+index d52a3b3a..e007c0b6 100644
+--- a/freebsd/sys/pcpu.h
++++ b/freebsd/sys/pcpu.h
+@@ -110,8 +110,20 @@ extern uintptr_t dpcpu_off[];
+ /*
+  * Accessors with a given base.
+  */
++#ifdef __CHERI_PURE_CAPABILITY__
++/*
++ * Provenance has to come from the variable address. Both operands below are
++ * uintcap under purecap, and dpcpu_off[] holds a plain integer zero because
++ * F-Stack never calls dpcpu_init. Adding two uintcaps lets the compiler take
++ * provenance from the untagged operand, producing a tag=0 pointer that faults
++ * on first use. Derive from &DPCPU_NAME(n) and add the base as an integer.
++ */
++#define	_DPCPU_PTR(b, n)						\
++    ((__typeof(DPCPU_NAME(n))*)((char *)&DPCPU_NAME(n) + (unsigned long)(b)))
++#else
+ #define	_DPCPU_PTR(b, n)						\
+     (__typeof(DPCPU_NAME(n))*)((b) + (uintptr_t)&DPCPU_NAME(n))
++#endif
+ #define	_DPCPU_GET(b, n)	(*_DPCPU_PTR(b, n))
+ #define	_DPCPU_SET(b, n, v)	(*_DPCPU_PTR(b, n) = v)
+ 
+diff --git a/freebsd/sys/types.h b/freebsd/sys/types.h
+index 8311c190..41012b4a 100644
+--- a/freebsd/sys/types.h
++++ b/freebsd/sys/types.h
+@@ -254,6 +254,9 @@ typedef	struct cap_rights	cap_rights_t;
+  * word size.  These should be used in place of vm_paddr_t, (u)intptr_t, and
+  * size_t in structs which contain such types that are shared with userspace.
+  */
++#ifdef __CHERI_PURE_CAPABILITY__
++typedef	__ptraddr_t	ptraddr_t;
++#endif
+ typedef	__uint64_t	kpaddr_t;
+ typedef	__uint64_t	kvaddr_t;
+ typedef	__uint64_t	ksize_t;
+diff --git a/freebsd/vm/uma_int.h b/freebsd/vm/uma_int.h
+index b05b5725..374438ca 100644
+--- a/freebsd/vm/uma_int.h
++++ b/freebsd/vm/uma_int.h
+@@ -381,8 +381,11 @@ struct uma_slab {
+ 	uint8_t		us_domain;		/* Backing NUMA domain. */
+ 	struct noslabbits us_free;		/* Free bitmask, flexible. */
+ };
++#ifndef FSTACK
++/* UMA uses offsetof(us_free) for slab math; purecap pads the struct past it, which wastes space rather than shifting the bitmask */
+ _Static_assert(sizeof(struct uma_slab) == __offsetof(struct uma_slab, us_free),
+     "us_free field must be last");
++#endif
+ _Static_assert(MAXMEMDOM < 255,
+     "us_domain field is not wide enough");
+ 
+diff --git a/lib/Makefile b/lib/Makefile
+index bacd3bad..efbc3656 100644
+--- a/lib/Makefile
++++ b/lib/Makefile
+@@ -393,12 +393,11 @@ KERN_MSRCS+=		\
+ ifeq (${MACHINE_CPUARCH},arm64)
+ LIBKERN_SRCS+=		 \
+ 	bcd.c		 \
++	gsb_crc32.c	 \
+ 	inet_ntoa.c	 \
+ 	jenkins_hash.c   \
+ 	strlcpy.c	 \
+-	strnlen.c        \
+-	fls.c		 \
+-	flsl.c
++	strnlen.c
+ else
+ LIBKERN_SRCS+=		 \
+ 	bcd.c		 \
+@@ -689,9 +688,11 @@ all: libfstack.a
+ #
+ libfstack.a: machine_includes ff_api.symlist ${MHEADERS} ${MSRCS} ${HOST_OBJS} ${ASM_OBJS} ${OBJS}
+ 	${LD} -d -r -o $*.ro ${ASM_OBJS} ${OBJS}
++ifndef FF_NO_LOCALIZE
+ 	nm $*.ro  | grep -v ' U ' | cut -d ' ' -f 3 > $*_localize_list.tmp
+ 	objcopy --localize-symbols=$*_localize_list.tmp $*.ro
+ 	rm $*_localize_list.tmp
++endif
+ 	objcopy --globalize-symbols=ff_api.symlist $*.ro
+ 	rm -f $@
+ 	ar -cqs $@ $*.ro ${HOST_OBJS}
+diff --git a/lib/ff_config.c b/lib/ff_config.c
+index 01d856e6..9b365927 100644
+--- a/lib/ff_config.c
++++ b/lib/ff_config.c
+@@ -31,6 +31,7 @@
+ #include <getopt.h>
+ #include <ctype.h>
+ #include <errno.h>
++#include <sys/socket.h>
+ #include <arpa/inet.h>
+ #include <rte_config.h>
+ #include <rte_string_fns.h>
+@@ -1204,6 +1205,25 @@ dpdk_args_setup(struct ff_config *cfg)
+         }
+     }
+ 
++    /*
++     * Extra EAL arguments from the environment, space separated. Used to hand
++     * EAL a --vdev the ini file has no schema for (its [vdevN] sections are
++     * virtio_user specific). This only changes what EAL is told about the
++     * device; the stack path above and below is untouched.
++     */
++    {
++        const char *extra = getenv("FF_EXTRA_EAL");
++        if (extra != NULL && *extra != 0) {
++            char *dup = strdup(extra), *save = NULL, *tok;
++            for (tok = strtok_r(dup, " ", &save); tok != NULL;
++                 tok = strtok_r(NULL, " ", &save)) {
++                if (n < DPDK_CONFIG_NUM)
++                    dpdk_argv[n++] = strdup(tok);
++            }
++            free(dup);
++        }
++    }
++
+     if (cfg->dpdk.nb_vdev) {
+         for (i=0; i<cfg->dpdk.nb_vdev; i++) {
+             sprintf(temp, "--vdev=virtio_user%d,path=%s",
+diff --git a/lib/ff_dpdk_if.c b/lib/ff_dpdk_if.c
+index 746a5f20..dee9f2e2 100644
+--- a/lib/ff_dpdk_if.c
++++ b/lib/ff_dpdk_if.c
+@@ -23,6 +23,7 @@
+  * SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+  *
+  */
++#include <stdlib.h>
+ #include <assert.h>
+ #include <unistd.h>
+ #include <sys/mman.h>
+@@ -2109,7 +2110,7 @@ process_packets(uint16_t port_id, uint16_t queue_id, struct rte_mbuf **bufs,
+                 cur_tsc = rte_rdtsc();
+                 ret = (*packet_dispatcher)(data, &len, queue_id, nb_queues);
+                 usr_cb_tsc += rte_rdtsc() - cur_tsc;
+-            } else if (packet_dispatcher_with_context) {
++            } else {   /* outer guard proves packet_dispatcher_with_context */
+                 struct ff_dispatcher_context ctx;
+                 if (rtem->ol_flags & RTE_MBUF_F_RX_VLAN_STRIPPED) {
+                     ctx.vlan.stripped = 1;
+diff --git a/lib/ff_dpdk_pcap.c b/lib/ff_dpdk_pcap.c
+index 6c223542..04067162 100644
+--- a/lib/ff_dpdk_pcap.c
++++ b/lib/ff_dpdk_pcap.c
+@@ -24,6 +24,7 @@
+  *
+  */
+ 
++#include <stdlib.h>
+ #include <sys/time.h>
+ #include <time.h>
+ #include <unistd.h>
+diff --git a/lib/ff_freebsd_init.c b/lib/ff_freebsd_init.c
+index c7a2b193..1c1e3839 100644
+--- a/lib/ff_freebsd_init.c
++++ b/lib/ff_freebsd_init.c
+@@ -109,7 +109,10 @@ ff_pcpu_thread_init(int cpuid)
+ 
+     pcpup = malloc(sizeof(struct pcpu), M_DEVBUF, M_ZERO);
+     pcpu_init(pcpup, cpuid, sizeof(struct pcpu));
++#ifndef __aarch64__
++    /* pc_prvspace is an x86-only member of struct pcpu; arm64 has none. */
+     PCPU_SET(prvspace, pcpup);
++#endif
+ }
+ 
+ /*
+diff --git a/lib/ff_init_main.c b/lib/ff_init_main.c
+index d95f6744..344d9dc4 100644
+--- a/lib/ff_init_main.c
++++ b/lib/ff_init_main.c
+@@ -89,6 +89,7 @@ __FBSDID("$FreeBSD$");
+ #include <ddb/db_sym.h>
+ 
+ void mi_startup(void); /* Should be elsewhere */
++void module_register_init(const void *);
+ int ff_adapt_user_proc_add(struct thread *parent_td, struct thread *td);
+ void ff_adapt_user_proc_exit(struct thread *td);
+ 
+@@ -227,6 +228,7 @@ restart:
+      * The last item on the list is expected to be the scheduler,
+      * which will not return.
+      */
++
+     for (sipp = sysinit; sipp < sysinit_end; sipp++) {
+ 
+         if ((*sipp)->subsystem == SI_SUB_DUMMY)
+@@ -260,7 +262,7 @@ restart:
+ #endif
+ 
+         /* Call function */
+-        (*((*sipp)->func))((*sipp)->udata);
++    (*((*sipp)->func))((*sipp)->udata);
+ 
+ #ifdef VERBOSE_SYSINIT
+         if (verbose)
+diff --git a/lib/ff_msg.h b/lib/ff_msg.h
+index 8f4a3408..9c2c0122 100644
+--- a/lib/ff_msg.h
++++ b/lib/ff_msg.h
+@@ -152,6 +152,13 @@ struct ff_msg {
+         struct ff_traffic_args traffic;
+         struct ff_knictl_args knictl;
+     };
+-} __attribute__((packed)) __rte_cache_aligned;
++}
++/* packed is for ff_tools IPC layout stability; under purecap it puts the
++   buf_addr/original_buf capabilities at unaligned offsets, which traps on
++   access. We do not run ff_tools, so drop the packing there. */
++#ifndef __CHERI_PURE_CAPABILITY__
++__attribute__((packed))
++#endif
++__rte_cache_aligned;
+ 
+ #endif
+diff --git a/lib/ff_stub_14_extra.c b/lib/ff_stub_14_extra.c
+index 3ed17902..782cf58b 100644
+--- a/lib/ff_stub_14_extra.c
++++ b/lib/ff_stub_14_extra.c
+@@ -252,7 +252,15 @@ void ktrexterr(struct thread *td)
+     
+ }
+ 
++#ifdef __amd64__
++/* struct kva_layout_s is defined only in amd64/include/pmap.h. */
+ struct kva_layout_s kva_layout = {0};
++#endif
++
++#ifdef __aarch64__
++/* arm64 direct-map base; F-Stack is userspace and never uses DMAP. */
++vm_paddr_t dmap_phys_base = 0;
++#endif
+ 
+ MALLOC_DEFINE(M_NVLIST, "nvlist", "kernel nvlist");
+ 
+diff --git a/lib/include/amd64/include/pcpu.h b/lib/include/amd64/include/pcpu.h
+index d1a5152d..250dc34a 100644
+--- a/lib/include/amd64/include/pcpu.h
++++ b/lib/include/amd64/include/pcpu.h
+@@ -55,7 +55,13 @@ ff_pcpu_get(void)
+ 	return (pcpup);
+ }
+ 
++#ifdef __aarch64__
++/* arm64 struct pcpu has no pc_prvspace self-pointer (it is amd64/i386
++   only); ff_pcpu_get() already returns the per-CPU structure. */
++#define	get_pcpu()              (ff_pcpu_get())
++#else
+ #define	get_pcpu()              (ff_pcpu_get()->pc_ ## prvspace)
++#endif
+ 
+ #define PCPU_GET(member)         (ff_pcpu_get()->pc_ ## member)
+ #define PCPU_ADD(member, val)    (ff_pcpu_get()->pc_ ## member += (val))
