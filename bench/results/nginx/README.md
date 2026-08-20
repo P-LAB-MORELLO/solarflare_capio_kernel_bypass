@@ -40,9 +40,17 @@ Reading:
   single core) while fsA reaches wire rate (~7.5 Gbit/s at 64k c8 ka).
 - Revocation (fsBrev) costs 3-20x depending on allocation churn, and
   fluctuates bimodally batch-to-batch (~2.7k vs ~3.9k rps at 1k ka).
-- 64k with fresh connections collapses on BOTH arms identically
-  (410 vs 404 rps: slow-start burst loss + 240 ms initial RTO;
-  an F-Stack/harness artifact, not CAPIO).
+- The 64k fresh-connection collapse is an fsA-side artifact, since
+  diagnosed: on a fresh DUT the cell runs clean (2963 rps, p100 2ms),
+  but after ~10^5 requests of connection churn ~1-2% of fresh-connection
+  64KB responses silently lose their segment at byte offset 44889
+  (exactly 31x1448; deterministic burst depth) and pay one 239 ms
+  initial RTO. All retransmissions originate from the server; F-Stack's
+  tx_dropped stays 0 (the stack believes the segment was sent), the
+  state persists through idle (not TIME_WAIT decay), and only a reboot
+  clears it. Stock-sfc-PMD/F-Stack interaction under churn - not CAPIO;
+  fsB post-fix measures 1722 rps in the same cell. Keepalive avoids it
+  entirely on both arms.
 - Zero failed requests in every cell on every arm.
 
 All three arms were only measurable after fixing dead TCP timers in the
