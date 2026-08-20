@@ -604,6 +604,47 @@ index 7261281d..8482793a 100644
  #if !defined(RTE_STACK_LF_SUPPORTED)
  	if (flags & RTE_STACK_F_LF) {
  		STACK_LOG_ERR("Lock-free stack is not supported on your platform");
+diff --git a/freebsd/arm64/include/atomic.h b/freebsd/arm64/include/atomic.h
+index 998a49c0..edbd8b1d 100644
+--- a/freebsd/arm64/include/atomic.h
++++ b/freebsd/arm64/include/atomic.h
+@@ -674,6 +674,36 @@ atomic_thread_fence_seq_cst(void)
+ }
+ 
+ #endif /* KCSAN && !KCSAN_RUNTIME */
++
++#ifdef __CHERI_PURE_CAPABILITY__
++/*
++ * The *_ptr aliases above resolve to the 64-bit atomics, which move only the
++ * address half of a capability and clear its tag. finit() publishes
++ * fp->f_ops through atomic_store_rel_ptr, so under purecap the socket
++ * fileops pointer arrived untagged and the first indirect call through it
++ * (fo_kqfilter, i.e. any kqueue registration) took SIGPROT.
++ *
++ * Override just the load/store pair with capability-width versions, using
++ * the compiler builtins as CheriBSD does. The arithmetic *_ptr atomics are
++ * deliberately left on the 64-bit path: nothing on this path needs them and
++ * their capability forms require inline Morello asm.
++ */
++#undef	atomic_load_acq_ptr
++#undef	atomic_store_rel_ptr
++
++static __inline uintptr_t
++atomic_load_acq_ptr(volatile uintptr_t *p)
++{
++	return (__atomic_load_n(p, __ATOMIC_ACQUIRE));
++}
++
++static __inline void
++atomic_store_rel_ptr(volatile uintptr_t *p, uintptr_t val)
++{
++	__atomic_store_n(p, val, __ATOMIC_RELEASE);
++}
++#endif /* __CHERI_PURE_CAPABILITY__ */
++
+ #endif /* _MACHINE_ATOMIC_H_ */
+ 
+ #endif /* !__arm__ */
 diff --git a/freebsd/arm64/include/pcpu.h b/freebsd/arm64/include/pcpu.h
 index ce2894a9..b9fdefc1 100644
 --- a/freebsd/arm64/include/pcpu.h

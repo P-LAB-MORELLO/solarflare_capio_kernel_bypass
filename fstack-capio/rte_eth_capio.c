@@ -522,9 +522,12 @@ eth_dev_info(struct rte_eth_dev *dev __rte_unused,
     dev_info->rx_offload_capa = RTE_ETH_RX_OFFLOAD_IPV4_CKSUM |
                                 RTE_ETH_RX_OFFLOAD_UDP_CKSUM |
                                 RTE_ETH_RX_OFFLOAD_TCP_CKSUM;
-    dev_info->tx_offload_capa = RTE_ETH_TX_OFFLOAD_IPV4_CKSUM |
-                                RTE_ETH_TX_OFFLOAD_UDP_CKSUM |
-                                RTE_ETH_TX_OFFLOAD_TCP_CKSUM;
+    /* TX csum offload NOT advertised: the kernel stub's INIT_TXQ runs with
+     * checksum insertion disabled (rawB's frozen config), so advertising it
+     * makes the stack emit zero checksums that no hardware fills in --
+     * invisible to pktgen, fatal against any real peer (kernel drops every
+     * reply as bad-cksum). Software checksums cost ~1.5% ceiling. */
+    dev_info->tx_offload_capa = 0;
     return 0;
 }
 

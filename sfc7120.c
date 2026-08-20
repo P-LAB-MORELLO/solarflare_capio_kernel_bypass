@@ -22,7 +22,7 @@ __FBSDID("$FreeBSD$");
 #include "sfc7120_mcdi.h"
 #include "sfc7120_mmio.h"
 
-#if CROSS_COMPILE
+#if defined(CROSS_COMPILE) && CROSS_COMPILE
 #include "../CheriModmap/modmap_api.h"
 #else
 #include "modmap_api.h"

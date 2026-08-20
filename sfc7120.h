@@ -217,6 +217,7 @@ typedef struct sfc7120_softc {
      * frames are steered to RX queue 0. The firmware-returned 64-bit handle
      * is needed to remove the filter on teardown. */
     uint64_t            rx_filter_handle;
+    uint64_t            rx_filter_bcast_handle;
     bool                rx_filter_inserted;
 
     /* MC_CMD_MAC_STATS DMA target (diagnostic): 97 uint64 counters. */

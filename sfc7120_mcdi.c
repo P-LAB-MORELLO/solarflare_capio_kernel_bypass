@@ -1781,6 +1781,7 @@ sfc7120_mcdi_get_link(sfc7120_softc_t *sc)
 #define MC_CMD_FILTER_OP_IN_PORT_ID_OFST                12
 #define MC_CMD_FILTER_OP_IN_MATCH_FIELDS_OFST           16
 #define MC_CMD_FILTER_OP_IN_MATCH_DST_MAC_LBN            4
+#define MC_CMD_FILTER_OP_IN_MATCH_UNKNOWN_MCAST_DST_LBN 30
 #define MC_CMD_FILTER_OP_IN_RX_DEST_OFST                20
 #define MC_CMD_FILTER_OP_IN_RX_DEST_HOST                0x1
 #define MC_CMD_FILTER_OP_IN_RX_QUEUE_OFST               24
@@ -1797,11 +1798,55 @@ sfc7120_mcdi_get_link(sfc7120_softc_t *sc)
 #define MC_CMD_FILTER_OP_OUT_HANDLE_LO_INVALID  0xffffffffu
 #define MC_CMD_FILTER_OP_OUT_HANDLE_HI_INVALID  0xffffffffu
 
+static int sfc7120_mcdi_filter_insert_mac(sfc7120_softc_t *sc,
+    const uint8_t *dst_mac, uint32_t match, uint64_t *handle_out);
+
+/*
+ * Install the RX filters: this port's unicast MAC, plus broadcast so ARP
+ * (and any other broadcast the stack must answer) reaches the driver.
+ */
 int
 sfc7120_mcdi_filter_insert(sfc7120_softc_t *sc)
 {
+    uint64_t h;
+    int rc;
+
     if (sc->rx_filter_inserted)
         return 0;
+
+    rc = sfc7120_mcdi_filter_insert_mac(sc, sc->mac_addr,
+        (1u << MC_CMD_FILTER_OP_IN_MATCH_DST_MAC_LBN), &h);
+    if (rc != 0)
+        return rc;
+    sc->rx_filter_handle = h;
+    sc->rx_filter_inserted = true;
+    device_printf(sc->dev, "MC FILTER_OP: unicast filter handle=0x%016jx\n",
+        (uintmax_t)h);
+
+    /* Broadcast is not fatal if it fails: unicast still works, so report and
+     * keep going rather than failing attach. */
+    /* UNKNOWN_MCAST_DST catches every multicast/broadcast frame not claimed
+     * by an exact filter. Broadcast has the group bit set, so this is what
+     * delivers ARP; an exact ff:ff:ff:ff:ff:ff filter inserts without error
+     * but never matches on this part. */
+    rc = sfc7120_mcdi_filter_insert_mac(sc, NULL,
+        (1u << MC_CMD_FILTER_OP_IN_MATCH_UNKNOWN_MCAST_DST_LBN), &h);
+    if (rc != 0) {
+        device_printf(sc->dev,
+            "MC FILTER_OP: broadcast filter failed: %d (ARP will not work)\n",
+            rc);
+        return 0;
+    }
+    sc->rx_filter_bcast_handle = h;
+    device_printf(sc->dev, "MC FILTER_OP: broadcast filter handle=0x%016jx\n",
+        (uintmax_t)h);
+    return 0;
+}
+
+static int
+sfc7120_mcdi_filter_insert_mac(sfc7120_softc_t *sc, const uint8_t *dst_mac,
+                               uint32_t match, uint64_t *handle_out)
+{
 
     uint8_t  buf[MC_CMD_FILTER_OP_IN_LEN]   = {0};
     uint8_t  resp[MC_CMD_FILTER_OP_OUT_LEN] = {0};
@@ -1813,8 +1858,6 @@ sfc7120_mcdi_filter_insert(sfc7120_softc_t *sc)
      * them to RX queue 0.  An exact DST_MAC filter catches the unicast traffic
      * addressed to us; promiscuous mode (MATCH_UNKNOWN_UCAST_DST) is not needed
      * for the loopback bridge use-case. */
-    uint32_t match = (1u << MC_CMD_FILTER_OP_IN_MATCH_DST_MAC_LBN);
-
     *(uint32_t *)(buf + MC_CMD_FILTER_OP_IN_OP_OFST) =
         MC_CMD_FILTER_OP_IN_OP_INSERT;
     *(uint32_t *)(buf + MC_CMD_FILTER_OP_IN_PORT_ID_OFST) =
@@ -1829,8 +1872,9 @@ sfc7120_mcdi_filter_insert(sfc7120_softc_t *sc)
         MC_CMD_FILTER_OP_IN_TX_DEST_DEFAULT;
 
     /* MAC goes in network byte order — sc->mac_addr is already big-endian. */
-    memcpy(buf + MC_CMD_FILTER_OP_IN_DST_MAC_OFST, sc->mac_addr,
-           MC_CMD_FILTER_OP_IN_DST_MAC_LEN);
+    if (dst_mac != NULL)
+        memcpy(buf + MC_CMD_FILTER_OP_IN_DST_MAC_OFST, dst_mac,
+               MC_CMD_FILTER_OP_IN_DST_MAC_LEN);
 
     rc = sfc7120_mcdi_exec(sc, MC_CMD_FILTER_OP,
                            buf, sizeof(buf), resp, sizeof(resp), &used);
@@ -1854,8 +1898,7 @@ sfc7120_mcdi_filter_insert(sfc7120_softc_t *sc)
         return EIO;
     }
 
-    sc->rx_filter_handle = ((uint64_t)handle_hi << 32) | (uint64_t)handle_lo;
-    sc->rx_filter_inserted = true;
+    *handle_out = ((uint64_t)handle_hi << 32) | (uint64_t)handle_lo;
     device_printf(sc->dev,
         "MC FILTER_OP: inserted handle=0x%016jx (dst_mac -> rxq 0)\n",
         (uintmax_t)sc->rx_filter_handle);
