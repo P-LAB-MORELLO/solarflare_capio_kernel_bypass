@@ -13,18 +13,25 @@ Steady-state requests/sec:
 
 | cell        | fsA (hybrid+sfc) | fsB (purecap+CAPIO) | fsBrev (fsB+revocation) |
 |-------------|-----------------:|--------------------:|------------------------:|
-| 1k  c1      | 10868 | 9646  | 2247 |
-| 1k  c1 ka   | 29750 | 28575 | 3318 |
-| 1k  c8      | 25074 | 22254 | 2702 |
-| 1k  c8 ka   | 83285 | 69637 | 3353 |
-| 48k c1      | 5656  | 5136  | 871  |
-| 48k c1 ka   | 8993  | 5853  | 965  |
-| 48k c8      | 11231 | 4136  | 962  |
-| 48k c8 ka   | 17116 | 4526  | 833  |
-| 64k c1      | 410   | 404   | 207  |
-| 64k c1 ka   | 7985  | 914   | 1016 |
-| 64k c8      | 3620  | 1147  | 566  |
-| 64k c8 ka   | 14278 | 3592  | 1015 |
+| 1k  c1      | 10868 | 9775  | 2224 |
+| 1k  c1 ka   | 29750 | 27946 | 3213 |
+| 1k  c8      | 25074 | 22178 | 2881 |
+| 1k  c8 ka   | 83285 | 69157 | 3268 |
+| 48k c1      | 5656  | 5084  | 851  |
+| 48k c1 ka   | 8993  | 8164  | 944  |
+| 48k c8      | 11231 | 8655  | 940  |
+| 48k c8 ka   | 17116 | 12494 | 918  |
+| 64k c1      | 410   | 1722  | 970  |
+| 64k c1 ka   | 7985  | 7098  | 998  |
+| 64k c8      | 3620  | 6995  | 991  |
+| 64k c8 ka   | 14278 | 10159 | 1001 |
+
+These fsB/fsBrev columns postdate the CAPIO PMD TX-completion fix; the
+originally committed numbers (see git history) were depressed 2-8x on bulk
+cells by the PMD recycling in-flight TX buffers. fsA (stock sfc PMD) was
+unaffected. With the fix, fsB shows p99 <= 1ms and zero failures in every
+cell, and the 64k-with-fresh-connections collapse turns out to be an
+fsA-side artifact (410 rps) rather than a shared one (fsB: 1722 rps).
 
 Reading:
 - Small responses: fsB reaches 84-96% of the hybrid arm. The CAPIO+purecap

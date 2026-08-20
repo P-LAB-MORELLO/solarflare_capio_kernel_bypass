@@ -63,7 +63,8 @@ struct capio_tx_queue {
      * which is what a stock PMD does. */
     struct rte_mbuf        *inflight[SFC7120_NUM_TX_DESC];
     uint16_t                last_freed;   /* last TX slot freed (merged completions) */
-    uint32_t                tx_tail;
+    uint32_t                tx_tail;      /* obsolete; kept for layout stability */
+    uint32_t                tx_inflight_cnt; /* slots posted, not yet completed */
     uint64_t                tx_pkts;
     uint64_t                tx_bytes;
     uint64_t                tx_dropped;
@@ -175,30 +176,29 @@ eth_capio_rx(void *q, struct rte_mbuf **bufs, uint16_t nb_bufs)
             }
         }
         if (evs[i].type != SFC7120_EV_RX) {
-            /* Reap TX completions: everything up to the reported slot is done
-             * with, so its buffer can go back to the pool. */
+            /* Reap TX completions. The event's TX_DESCR_INDX is the LAST
+             * descriptor the NIC has actually finished with (low 16 bits of
+             * a free-running counter). Free (last_freed, done] and nothing
+             * more: the old code freed every slot up to the software post
+             * head, i.e. it recycled mbufs and identity TX buffers the NIC
+             * had not DMA'd yet -- torn frames, duplicated segments and
+             * silent holes on the wire (with hardware csum insertion
+             * stamping the torn bytes as valid). */
             if (evs[i].type == SFC7120_EV_TX) {
                 struct capio_tx_queue *txq = &pi->txq;
-                while (txq->tx_tail != pi->sfc.tx_head) {
-                    uint32_t s = txq->tx_tail & (SFC7120_NUM_TX_DESC - 1);
-                    /* Completions are merged: the event carries only the
-                     * last completed index. Free the whole range since the
-                     * previous completion, or the merged slots leak and the
-                     * mempool drains until RX allocation fails. */
-                    {
-                        uint16_t f = txq->last_freed;
-                        while (f != s) {
-                            f = (f + 1) & (SFC7120_NUM_TX_DESC - 1);
-                            if (txq->inflight[f] != NULL) {
-                                rte_pktmbuf_free(txq->inflight[f]);
-                                txq->inflight[f] = NULL;
-                            }
-                        }
-                        txq->last_freed = s;
+                uint16_t done = evs[i].tx_desc_idx &
+                                (SFC7120_NUM_TX_DESC - 1);
+                uint16_t f = txq->last_freed;
+                while (f != done) {
+                    f = (f + 1) & (SFC7120_NUM_TX_DESC - 1);
+                    if (txq->inflight[f] != NULL) {
+                        rte_pktmbuf_free(txq->inflight[f]);
+                        txq->inflight[f] = NULL;
                     }
-                    txq->tx_tail = (txq->tx_tail + 1) &
-                                   (SFC7120_NUM_TX_DESC - 1);
+                    if (txq->tx_inflight_cnt > 0)
+                        txq->tx_inflight_cnt--;
                 }
+                txq->last_freed = done;
             }
             continue;
         }
@@ -387,6 +387,17 @@ eth_capio_tx(void *q, struct rte_mbuf **bufs, uint16_t nb_bufs)
             continue;
         }
 
+        /* Never let the producer lap the NIC: with merged completions the
+         * hardware can be hundreds of descriptors behind the software head,
+         * and both TX modes reuse ring resources by index. Stop posting
+         * when the ring is nearly full; F-Stack counts what it then drops
+         * and TCP retransmits it. */
+        if (pi->txq.tx_inflight_cnt >= SFC7120_NUM_TX_DESC - 16) {
+            pi->txq.tx_dropped++;
+            rte_pktmbuf_free(m);
+            break;
+        }
+
         /* EF10 does not auto-pad runts. Short frames (ARP is 42B) must be
          * padded to the 60B minimum or the peer NIC discards them and ARP
          * never resolves. Rare frames, so the copy is free. */
@@ -401,6 +412,7 @@ eth_capio_tx(void *q, struct rte_mbuf **bufs, uint16_t nb_bufs)
             }
             rte_pktmbuf_free(m);
             txq->tx_pkts++;
+            txq->tx_inflight_cnt++;
             txq->tx_bytes += CAPIO_MIN_TX_FRAME;
             continue;
         }
@@ -416,6 +428,7 @@ eth_capio_tx(void *q, struct rte_mbuf **bufs, uint16_t nb_bufs)
             }
             rte_pktmbuf_free(m);
             txq->tx_pkts++;
+            txq->tx_inflight_cnt++;
             txq->tx_bytes += len;
             continue;
         }
@@ -432,6 +445,7 @@ eth_capio_tx(void *q, struct rte_mbuf **bufs, uint16_t nb_bufs)
 
         txq->inflight[tx_slot] = m;
         txq->tx_pkts++;
+        txq->tx_inflight_cnt++;
         txq->tx_bytes += len;
     }
 
@@ -605,6 +619,8 @@ eth_stats_reset(struct rte_eth_dev *dev)
 
     memset(&pi->rxq.rx_pkts, 0, sizeof(uint64_t) * 3);
     memset(&pi->txq.tx_pkts, 0, sizeof(uint64_t) * 3);
+    pi->txq.last_freed = SFC7120_NUM_TX_DESC - 1;
+    pi->txq.tx_inflight_cnt = 0;
     return 0;
 }
 

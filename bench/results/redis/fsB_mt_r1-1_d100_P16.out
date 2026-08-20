@@ -1,0 +1,27 @@
+Json file fsB_mt_r1-1_d100_P16.json created...
+Writing results to stdout
+[RUN #1] Preparing benchmark client...
+[RUN #1] Launching threads now...
+[RUN #1 5%,   1 secs]  2 threads  4 conns:      477513 ops,  477491 (avg:  477491) ops/sec, 64.72MB/sec (avg: 64.72MB/sec),  0.26 (avg:  0.26) msec latency[RUN #1 10%,   2 secs]  2 threads  4 conns:      943600 ops,  466032 (avg:  471761) ops/sec, 63.20MB/sec (avg: 63.96MB/sec),  0.27 (avg:  0.27) msec latency[RUN #1 15%,   3 secs]  2 threads  4 conns:     1411040 ops,  467382 (avg:  470302) ops/sec, 63.36MB/sec (avg: 63.76MB/sec),  0.27 (avg:  0.27) msec latency[RUN #1 20%,   4 secs]  2 threads  4 conns:     1881472 ops,  470373 (avg:  470320) ops/sec, 63.76MB/sec (avg: 63.76MB/sec),  0.27 (avg:  0.27) msec latency[RUN #1 25%,   5 secs]  2 threads  4 conns:     2356272 ops,  474747 (avg:  471205) ops/sec, 64.32MB/sec (avg: 63.87MB/sec),  0.26 (avg:  0.27) msec latency[RUN #1 30%,   6 secs]  2 threads  4 conns:     2800630 ops,  444297 (avg:  466720) ops/sec, 60.24MB/sec (avg: 63.27MB/sec),  0.28 (avg:  0.27) msec latency[RUN #1 35%,   7 secs]  2 threads  4 conns:     3249744 ops,  449064 (avg:  464198) ops/sec, 60.88MB/sec (avg: 62.92MB/sec),  0.28 (avg:  0.27) msec latency[RUN #1 40%,   8 secs]  2 threads  4 conns:     3697280 ops,  447486 (avg:  462109) ops/sec, 60.89MB/sec (avg: 62.67MB/sec),  0.28 (avg:  0.27) msec latency[RUN #1 45%,   9 secs]  2 threads  4 conns:     4146128 ops,  448797 (avg:  460630) ops/sec, 61.18MB/sec (avg: 62.50MB/sec),  0.28 (avg:  0.27) msec latency[RUN #1 50%,  10 secs]  2 threads  4 conns:     4589984 ops,  443795 (avg:  458946) ops/sec, 60.56MB/sec (avg: 62.31MB/sec),  0.28 (avg:  0.27) msec latency[RUN #1 55%,  11 secs]  2 threads  4 conns:     5033216 ops,  443183 (avg:  457513) ops/sec, 60.51MB/sec (avg: 62.15MB/sec),  0.28 (avg:  0.28) msec latency[RUN #1 60%,  12 secs]  2 threads  4 conns:     5471680 ops,  438408 (avg:  455921) ops/sec, 59.88MB/sec (avg: 61.96MB/sec),  0.29 (avg:  0.28) msec latency[RUN #1 65%,  13 secs]  2 threads  4 conns:     5920080 ops,  448343 (avg:  455338) ops/sec, 61.25MB/sec (avg: 61.90MB/sec),  0.28 (avg:  0.28) msec latency[RUN #1 70%,  14 secs]  2 threads  4 conns:     6371280 ops,  451151 (avg:  455039) ops/sec, 61.64MB/sec (avg: 61.88MB/sec),  0.28 (avg:  0.28) msec latency[RUN #1 75%,  15 secs]  2 threads  4 conns:     6820848 ops,  449511 (avg:  454670) ops/sec, 61.42MB/sec (avg: 61.85MB/sec),  0.28 (avg:  0.28) msec latency[RUN #1 80%,  16 secs]  2 threads  4 conns:     7267664 ops,  446765 (avg:  454176) ops/sec, 61.05MB/sec (avg: 61.80MB/sec),  0.28 (avg:  0.28) msec latency[RUN #1 85%,  17 secs]  2 threads  4 conns:     7716864 ops,  449150 (avg:  453881) ops/sec, 61.37MB/sec (avg: 61.78MB/sec),  0.28 (avg:  0.28) msec latency[RUN #1 90%,  18 secs]  2 threads  4 conns:     8167264 ops,  450351 (avg:  453685) ops/sec, 61.54MB/sec (avg: 61.76MB/sec),  0.28 (avg:  0.28) msec latency[RUN #1 95%,  19 secs]  2 threads  4 conns:     8612032 ops,  444714 (avg:  453212) ops/sec, 60.77MB/sec (avg: 61.71MB/sec),  0.28 (avg:  0.28) msec latency[RUN #1 100%,  20 secs]  0 threads  4 conns:     9052576 ops,  444714 (avg:  452621) ops/sec, 60.77MB/sec (avg: 61.64MB/sec),  0.28 (avg:  0.28) msec latency
+
+
+CPU Utilization Summary
+  Total CPU time:   13.732s  (user 9.128s, sys 4.603s)
+  Wall time:        20.001s
+  Cores used:       0.687   (avg 34.3% across 2 worker threads)
+  Peak utilization: 71.8%
+Saving JSON output file: fsB_mt_r1-1_d100_P16.json
+Json file closed.
+2         Threads
+4         Connections per thread
+20        Seconds
+
+
+ALL STATS
+============================================================================================================================
+Type         Ops/sec     Hits/sec   Misses/sec    Avg. Latency     p50 Latency     p99 Latency   p99.9 Latency       KB/sec 
+----------------------------------------------------------------------------------------------------------------------------
+Sets       226310.48          ---          ---         0.27859         0.27900         0.39900         0.43100     32217.91 
+Gets       226310.48    224216.72      2093.76         0.27859         0.27900         0.39900         0.43100     30902.24 
+Waits           0.00          ---          ---             ---             ---             ---             ---          --- 
+Totals     452620.97    224216.72      2093.76         0.27859         0.27900         0.39900         0.43100     63120.15 

@@ -13,23 +13,23 @@ Document Path:          /f48k.bin
 Document Length:        49152 bytes
 
 Concurrency Level:      1
-Time taken for tests:   0.854 seconds
+Time taken for tests:   0.612 seconds
 Complete requests:      5000
 Failed requests:        0
 Keep-Alive requests:    5000
 Total transferred:      247040000 bytes
 HTML transferred:       245760000 bytes
-Requests per second:    5853.37 [#/sec] (mean)
-Time per request:       0.171 [ms] (mean)
-Time per request:       0.171 [ms] (mean, across all concurrent requests)
-Transfer rate:          282425.03 [Kbytes/sec] received
+Requests per second:    8163.95 [#/sec] (mean)
+Time per request:       0.122 [ms] (mean)
+Time per request:       0.122 [ms] (mean, across all concurrent requests)
+Transfer rate:          393910.35 [Kbytes/sec] received
 
 Connection Times (ms)
               min  mean[+/-sd] median   max
 Connect:        0    0   0.0      0       0
-Processing:     0    0   3.4      0     239
+Processing:     0    0   0.0      0       0
 Waiting:        0    0   0.0      0       0
-Total:          0    0   3.4      0     239
+Total:          0    0   0.0      0       0
 
 Percentage of the requests served within a certain time (ms)
   50%      0
@@ -40,4 +40,4 @@ Percentage of the requests served within a certain time (ms)
   95%      0
   98%      0
   99%      0
- 100%    239 (longest request)
+ 100%      0 (longest request)

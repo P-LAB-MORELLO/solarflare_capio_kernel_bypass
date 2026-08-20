@@ -13,23 +13,23 @@ Document Path:          /f1k.bin
 Document Length:        1024 bytes
 
 Concurrency Level:      1
-Time taken for tests:   0.700 seconds
+Time taken for tests:   0.716 seconds
 Complete requests:      20000
 Failed requests:        0
 Keep-Alive requests:    20000
 Total transferred:      25560000 bytes
 HTML transferred:       20480000 bytes
-Requests per second:    28574.82 [#/sec] (mean)
-Time per request:       0.035 [ms] (mean)
-Time per request:       0.035 [ms] (mean, across all concurrent requests)
-Transfer rate:          35662.71 [Kbytes/sec] received
+Requests per second:    27945.88 [#/sec] (mean)
+Time per request:       0.036 [ms] (mean)
+Time per request:       0.036 [ms] (mean, across all concurrent requests)
+Transfer rate:          34877.77 [Kbytes/sec] received
 
 Connection Times (ms)
               min  mean[+/-sd] median   max
 Connect:        0    0   0.0      0       0
-Processing:     0    0   0.0      0       0
-Waiting:        0    0   0.0      0       0
-Total:          0    0   0.0      0       0
+Processing:     0    0   0.0      0       2
+Waiting:        0    0   0.0      0       2
+Total:          0    0   0.0      0       2
 
 Percentage of the requests served within a certain time (ms)
   50%      0
@@ -40,4 +40,4 @@ Percentage of the requests served within a certain time (ms)
   95%      0
   98%      0
   99%      0
- 100%      0 (longest request)
+ 100%      2 (longest request)

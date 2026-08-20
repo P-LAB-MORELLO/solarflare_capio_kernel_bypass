@@ -1,0 +1,50 @@
+/usr/bin/java  -classpath /home/devel/Documents/cheri_workspace/sfc_bench/ycsb-redis-binding-0.17.0/conf:/home/devel/Documents/cheri_workspace/sfc_bench/ycsb-redis-binding-0.17.0/lib/commons-pool2-2.4.2.jar:/home/devel/Documents/cheri_workspace/sfc_bench/ycsb-redis-binding-0.17.0/lib/core-0.17.0.jar:/home/devel/Documents/cheri_workspace/sfc_bench/ycsb-redis-binding-0.17.0/lib/HdrHistogram-2.1.4.jar:/home/devel/Documents/cheri_workspace/sfc_bench/ycsb-redis-binding-0.17.0/lib/htrace-core4-4.1.0-incubating.jar:/home/devel/Documents/cheri_workspace/sfc_bench/ycsb-redis-binding-0.17.0/lib/jackson-core-asl-1.9.4.jar:/home/devel/Documents/cheri_workspace/sfc_bench/ycsb-redis-binding-0.17.0/lib/jackson-mapper-asl-1.9.4.jar:/home/devel/Documents/cheri_workspace/sfc_bench/ycsb-redis-binding-0.17.0/lib/jedis-2.9.0.jar:/home/devel/Documents/cheri_workspace/sfc_bench/ycsb-redis-binding-0.17.0/lib/redis-binding-0.17.0.jar site.ycsb.Client -t -db site.ycsb.db.RedisClient -s -P workloads/workloada -p redis.host=10.0.1.2 -p redis.port=6379 -p recordcount=50000 -p operationcount=100000 -threads 8
+Command line: -t -db site.ycsb.db.RedisClient -s -P workloads/workloada -p redis.host=10.0.1.2 -p redis.port=6379 -p recordcount=50000 -p operationcount=100000 -threads 8
+YCSB Client 0.17.0
+
+Loading workload...
+Starting test.
+DBWrapper: report latency for each error is false and specific error codes to track for latency are: []
+DBWrapper: report latency for each error is false and specific error codes to track for latency are: []
+DBWrapper: report latency for each error is false and specific error codes to track for latency are: []
+DBWrapper: report latency for each error is false and specific error codes to track for latency are: []
+DBWrapper: report latency for each error is false and specific error codes to track for latency are: []
+DBWrapper: report latency for each error is false and specific error codes to track for latency are: []
+DBWrapper: report latency for each error is false and specific error codes to track for latency are: []
+DBWrapper: report latency for each error is false and specific error codes to track for latency are: []
+2026-08-20 07:17:51:424 0 sec: 189 operations; ∞ current ops/sec; est completion in 0 second [READ: Count=102, Max=11351, Min=92, Avg=592.68, 90=1252, 99=3643, 99.9=11351, 99.99=11351] [UPDATE: Count=486, Max=6331, Min=76, Avg=443.53, 90=783, 99=5083, 99.9=6331, 99.99=6331] 
+2026-08-20 07:17:53:596 2 sec: 100000 operations; 44698.16 current ops/sec; [READ: Count=50096, Max=787967, Min=31, Avg=166.45, 90=130, 99=273, 99.9=2563, 99.99=4703] [CLEANUP: Count=8, Max=618, Min=41, Avg=132.38, 90=109, 99=618, 99.9=618, 99.99=618] [UPDATE: Count=49316, Max=787967, Min=26, Avg=165.45, 90=130, 99=312, 99.9=2567, 99.99=4043] 
+[OVERALL], RunTime(ms), 2233
+[OVERALL], Throughput(ops/sec), 44782.80340349306
+[TOTAL_GCS_G1_Young_Generation], Count, 4
+[TOTAL_GC_TIME_G1_Young_Generation], Time(ms), 8
+[TOTAL_GC_TIME_%_G1_Young_Generation], Time(%), 0.35826242722794444
+[TOTAL_GCS_G1_Concurrent_GC], Count, 0
+[TOTAL_GC_TIME_G1_Concurrent_GC], Time(ms), 0
+[TOTAL_GC_TIME_%_G1_Concurrent_GC], Time(%), 0.0
+[TOTAL_GCS_G1_Old_Generation], Count, 0
+[TOTAL_GC_TIME_G1_Old_Generation], Time(ms), 0
+[TOTAL_GC_TIME_%_G1_Old_Generation], Time(%), 0.0
+[TOTAL_GCs], Count, 4
+[TOTAL_GC_TIME], Time(ms), 8
+[TOTAL_GC_TIME_%], Time(%), 0.35826242722794444
+[READ], Operations, 50198
+[READ], AverageLatency(us), 167.31790111159808
+[READ], MinLatency(us), 31
+[READ], MaxLatency(us), 787967
+[READ], 95thPercentileLatency(us), 152
+[READ], 99thPercentileLatency(us), 290
+[READ], Return=OK, 50198
+[CLEANUP], Operations, 8
+[CLEANUP], AverageLatency(us), 132.375
+[CLEANUP], MinLatency(us), 41
+[CLEANUP], MaxLatency(us), 618
+[CLEANUP], 95thPercentileLatency(us), 618
+[CLEANUP], 99thPercentileLatency(us), 618
+[UPDATE], Operations, 49802
+[UPDATE], AverageLatency(us), 168.16435082928396
+[UPDATE], MinLatency(us), 26
+[UPDATE], MaxLatency(us), 787967
+[UPDATE], 95thPercentileLatency(us), 158
+[UPDATE], 99thPercentileLatency(us), 402
+[UPDATE], Return=OK, 49802

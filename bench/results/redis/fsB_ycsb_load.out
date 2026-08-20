@@ -1,0 +1,43 @@
+/usr/bin/java  -classpath /home/devel/Documents/cheri_workspace/sfc_bench/ycsb-redis-binding-0.17.0/conf:/home/devel/Documents/cheri_workspace/sfc_bench/ycsb-redis-binding-0.17.0/lib/commons-pool2-2.4.2.jar:/home/devel/Documents/cheri_workspace/sfc_bench/ycsb-redis-binding-0.17.0/lib/core-0.17.0.jar:/home/devel/Documents/cheri_workspace/sfc_bench/ycsb-redis-binding-0.17.0/lib/HdrHistogram-2.1.4.jar:/home/devel/Documents/cheri_workspace/sfc_bench/ycsb-redis-binding-0.17.0/lib/htrace-core4-4.1.0-incubating.jar:/home/devel/Documents/cheri_workspace/sfc_bench/ycsb-redis-binding-0.17.0/lib/jackson-core-asl-1.9.4.jar:/home/devel/Documents/cheri_workspace/sfc_bench/ycsb-redis-binding-0.17.0/lib/jackson-mapper-asl-1.9.4.jar:/home/devel/Documents/cheri_workspace/sfc_bench/ycsb-redis-binding-0.17.0/lib/jedis-2.9.0.jar:/home/devel/Documents/cheri_workspace/sfc_bench/ycsb-redis-binding-0.17.0/lib/redis-binding-0.17.0.jar site.ycsb.Client -load -db site.ycsb.db.RedisClient -s -P workloads/workloada -p redis.host=10.0.1.2 -p redis.port=6379 -p recordcount=50000 -threads 8
+Command line: -load -db site.ycsb.db.RedisClient -s -P workloads/workloada -p redis.host=10.0.1.2 -p redis.port=6379 -p recordcount=50000 -threads 8
+YCSB Client 0.17.0
+
+Loading workload...
+Starting test.
+2026-08-20 07:11:07:224 0 sec: 0 operations; est completion in 0 second 
+DBWrapper: report latency for each error is false and specific error codes to track for latency are: []
+DBWrapper: report latency for each error is false and specific error codes to track for latency are: []
+DBWrapper: report latency for each error is false and specific error codes to track for latency are: []
+DBWrapper: report latency for each error is false and specific error codes to track for latency are: []
+DBWrapper: report latency for each error is false and specific error codes to track for latency are: []
+DBWrapper: report latency for each error is false and specific error codes to track for latency are: []
+DBWrapper: report latency for each error is false and specific error codes to track for latency are: []
+DBWrapper: report latency for each error is false and specific error codes to track for latency are: []
+2026-08-20 07:11:08:808 1 sec: 50000 operations; 30599.76 current ops/sec; [CLEANUP: Count=8, Max=584, Min=40, Avg=130, 90=103, 99=584, 99.9=584, 99.99=584] [INSERT: Count=50000, Max=13343, Min=71, Avg=237.97, 90=279, 99=1128, 99.9=3141, 99.99=8751] 
+[OVERALL], RunTime(ms), 1634
+[OVERALL], Throughput(ops/sec), 30599.755201958385
+[TOTAL_GCS_G1_Young_Generation], Count, 5
+[TOTAL_GC_TIME_G1_Young_Generation], Time(ms), 10
+[TOTAL_GC_TIME_%_G1_Young_Generation], Time(%), 0.6119951040391677
+[TOTAL_GCS_G1_Concurrent_GC], Count, 0
+[TOTAL_GC_TIME_G1_Concurrent_GC], Time(ms), 0
+[TOTAL_GC_TIME_%_G1_Concurrent_GC], Time(%), 0.0
+[TOTAL_GCS_G1_Old_Generation], Count, 0
+[TOTAL_GC_TIME_G1_Old_Generation], Time(ms), 0
+[TOTAL_GC_TIME_%_G1_Old_Generation], Time(%), 0.0
+[TOTAL_GCs], Count, 5
+[TOTAL_GC_TIME], Time(ms), 10
+[TOTAL_GC_TIME_%], Time(%), 0.6119951040391677
+[CLEANUP], Operations, 8
+[CLEANUP], AverageLatency(us), 130.0
+[CLEANUP], MinLatency(us), 40
+[CLEANUP], MaxLatency(us), 584
+[CLEANUP], 95thPercentileLatency(us), 584
+[CLEANUP], 99thPercentileLatency(us), 584
+[INSERT], Operations, 50000
+[INSERT], AverageLatency(us), 237.96834
+[INSERT], MinLatency(us), 71
+[INSERT], MaxLatency(us), 13343
+[INSERT], 95thPercentileLatency(us), 312
+[INSERT], 99thPercentileLatency(us), 1128
+[INSERT], Return=OK, 50000

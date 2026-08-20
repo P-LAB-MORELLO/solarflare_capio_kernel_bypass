@@ -1,0 +1,28 @@
+Json file fsBrev_mt_r1-9_d100_P16.json created...
+Writing results to stdout
+[RUN #1] Preparing benchmark client...
+[RUN #1] Launching threads now...
+[RUN #1 5%,   1 secs]  2 threads  4 conns:      245148 ops,  245142 (avg:  245142) ops/sec, 137.11MB/sec (avg: 137.11MB/sec),  0.46 (avg:  0.46) msec latency[RUN #1 10%,   2 secs]  2 threads  4 conns:      360700 ops,  115537 (avg:  180336) ops/sec, 65.51MB/sec (avg: 101.31MB/sec),  1.24 (avg:  0.71) msec latency[RUN #1 15%,   3 secs]  2 threads  4 conns:      494389 ops,  133669 (avg:  164780) ops/sec, 75.00MB/sec (avg: 92.54MB/sec),  0.58 (avg:  0.67) msec latency[RUN #1 20%,   4 secs]  2 threads  4 conns:      705139 ops,  210725 (avg:  176266) ops/sec, 119.04MB/sec (avg: 99.17MB/sec),  0.84 (avg:  0.72) msec latency[RUN #1 25%,   5 secs]  2 threads  4 conns:      774656 ops,   69509 (avg:  154914) ops/sec, 39.00MB/sec (avg: 87.13MB/sec),  1.84 (avg:  0.82) msec latency[RUN #1 30%,   6 secs]  2 threads  4 conns:      990177 ops,  215495 (avg:  165011) ops/sec, 120.93MB/sec (avg: 92.77MB/sec),  0.51 (avg:  0.75) msec latency[RUN #1 35%,   7 secs]  2 threads  4 conns:     1122308 ops,  132116 (avg:  160312) ops/sec, 74.52MB/sec (avg: 90.16MB/sec),  1.11 (avg:  0.80) msec latency[RUN #1 40%,   8 secs]  2 threads  4 conns:     1238398 ops,  116077 (avg:  154783) ops/sec, 64.85MB/sec (avg: 87.00MB/sec),  0.54 (avg:  0.77) msec latency[RUN #1 45%,   9 secs]  2 threads  4 conns:     1473333 ops,  234908 (avg:  163685) ops/sec, 125.18MB/sec (avg: 91.24MB/sec),  0.82 (avg:  0.78) msec latency[RUN #1 50%,  10 secs]  2 threads  4 conns:     1560984 ops,   87638 (avg:  156080) ops/sec, 44.17MB/sec (avg: 86.53MB/sec),  1.46 (avg:  0.82) msec latency[RUN #1 55%,  11 secs]  2 threads  4 conns:     1738846 ops,  177838 (avg:  158058) ops/sec, 89.82MB/sec (avg: 86.83MB/sec),  0.45 (avg:  0.78) msec latency[RUN #1 60%,  12 secs]  2 threads  4 conns:     1939126 ops,  200257 (avg:  161575) ops/sec, 99.70MB/sec (avg: 87.90MB/sec),  0.88 (avg:  0.79) msec latency[RUN #1 65%,  13 secs]  2 threads  4 conns:     2031414 ops,   92278 (avg:  156244) ops/sec, 44.76MB/sec (avg: 84.58MB/sec),  1.38 (avg:  0.82) msec latency[RUN #1 70%,  14 secs]  2 threads  4 conns:     2215352 ops,  183917 (avg:  158221) ops/sec, 87.95MB/sec (avg: 84.82MB/sec),  0.47 (avg:  0.79) msec latency[RUN #1 75%,  15 secs]  2 threads  4 conns:     2401360 ops,  185994 (avg:  160073) ops/sec, 86.58MB/sec (avg: 84.94MB/sec),  0.90 (avg:  0.80) msec latency[RUN #1 80%,  16 secs]  2 threads  4 conns:     2494275 ops,   92904 (avg:  155874) ops/sec, 42.18MB/sec (avg: 82.27MB/sec),  1.38 (avg:  0.82) msec latency[RUN #1 85%,  17 secs]  2 threads  4 conns:     2678550 ops,  184252 (avg:  157544) ops/sec, 79.94MB/sec (avg: 82.13MB/sec),  0.43 (avg:  0.79) msec latency[RUN #1 90%,  18 secs]  2 threads  4 conns:     2892554 ops,  213980 (avg:  160679) ops/sec, 89.89MB/sec (avg: 82.56MB/sec),  0.82 (avg:  0.79) msec latency[RUN #1 95%,  19 secs]  2 threads  4 conns:     2987511 ops,   94945 (avg:  157219) ops/sec, 38.25MB/sec (avg: 80.23MB/sec),  1.34 (avg:  0.81) msec latency[RUN #1 100%,  20 secs]  2 threads  4 conns:     3128496 ops,  140968 (avg:  156407) ops/sec, 56.23MB/sec (avg: 79.03MB/sec),  0.42 (avg:  0.79) msec latency[RUN #1 101%,  20 secs]  0 threads  4 conns:     3128624 ops,  140968 (avg:  155275) ops/sec, 56.23MB/sec (avg: 78.46MB/sec),  0.42 (avg:  0.82) msec latency
+
+warning: GET miss rate 2.76% above target 1.00% (77621 misses / 2815757 ops)
+
+CPU Utilization Summary
+  Total CPU time:   9.637s  (user 4.436s, sys 5.200s)
+  Wall time:        20.149s
+  Cores used:       0.478   (avg 23.9% across 2 worker threads)
+  Peak utilization: 80.2%
+Saving JSON output file: fsBrev_mt_r1-9_d100_P16.json
+Json file closed.
+2         Threads
+4         Connections per thread
+20        Seconds
+
+
+ALL STATS
+============================================================================================================================
+Type         Ops/sec     Hits/sec   Misses/sec    Avg. Latency     p50 Latency     p99 Latency   p99.9 Latency       KB/sec 
+----------------------------------------------------------------------------------------------------------------------------
+Sets        15527.47          ---          ---         0.84126         0.44700         0.53500         2.30300      2210.50 
+Gets       139745.24    135892.92      3852.32         0.81996         0.44700         0.53500         1.81500     78129.56 
+Waits           0.00          ---          ---             ---             ---             ---             ---          --- 
+Totals     155272.71    135892.92      3852.32         0.82209         0.44700         0.53500         1.83900     80340.06 

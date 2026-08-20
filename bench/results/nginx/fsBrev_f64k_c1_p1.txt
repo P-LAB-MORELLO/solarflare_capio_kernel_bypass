@@ -13,22 +13,22 @@ Document Path:          /f64k.bin
 Document Length:        65536 bytes
 
 Concurrency Level:      1
-Time taken for tests:   9.412 seconds
+Time taken for tests:   2.793 seconds
 Complete requests:      2000
 Failed requests:        0
 Total transferred:      131576000 bytes
 HTML transferred:       131072000 bytes
-Requests per second:    212.50 [#/sec] (mean)
-Time per request:       4.706 [ms] (mean)
-Time per request:       4.706 [ms] (mean, across all concurrent requests)
-Transfer rate:          13652.33 [Kbytes/sec] received
+Requests per second:    716.12 [#/sec] (mean)
+Time per request:       1.396 [ms] (mean)
+Time per request:       1.396 [ms] (mean, across all concurrent requests)
+Transfer rate:          46007.83 [Kbytes/sec] received
 
 Connection Times (ms)
               min  mean[+/-sd] median   max
-Connect:        0    0   0.1      0       3
-Processing:     0    5  32.8      0     499
-Waiting:        0    0   4.8      0     126
-Total:          0    5  32.8      0     500
+Connect:        0    0  10.0      0     447
+Processing:     0    1  17.4      0     484
+Waiting:        0    1  12.2      0     475
+Total:          0    1  20.1      0     484
 
 Percentage of the requests served within a certain time (ms)
   50%      0
@@ -37,6 +37,6 @@ Percentage of the requests served within a certain time (ms)
   80%      0
   90%      0
   95%      0
-  98%      3
-  99%    236
- 100%    500 (longest request)
+  98%      0
+  99%      1
+ 100%    484 (longest request)
