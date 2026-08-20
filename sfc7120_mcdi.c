@@ -1324,8 +1324,12 @@ sfc7120_mcdi_init_txq(sfc7120_softc_t *sc, uint32_t instance,
      *   FLAG_IP_CSUM_DIS     (bit 1) = 1 — disable IPv4 csum offload
      *   FLAG_TCP_CSUM_DIS    (bit 2) = 1 — disable TCP/UDP csum offload
      * All other bits (TCP_UDP_ONLY, CRC_MODE, TIMESTAMP, PACER_BYPASS,
-     * INNER_*_CSUM_EN) left 0. */
-    uint32_t flags = (1u << 1) | (1u << 2);
+     * INNER_*_CSUM_EN) left 0.
+     * Csum insertion is ENABLED (flags 0): the F-Stack arm serves TCP and
+     * pays per-byte software checksums otherwise, while the comparison arm
+     * (stock sfc PMD) offloads. The raw UDP arms are checksum-agnostic:
+     * insertion just rewrites their already-correct headers. */
+    uint32_t flags = 0;
 
     uint8_t buf[MC_CMD_INIT_TXQ_IN_LEN(1)] = {0};
     *(uint32_t *)(buf + MC_CMD_INIT_TXQ_IN_SIZE_OFST)       = ndescs;

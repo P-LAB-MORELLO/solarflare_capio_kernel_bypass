@@ -33,6 +33,7 @@
 #include <vm/vm_param.h>
 #include <vm/vm_page.h>
 #include <machine/pmap.h>
+#include <sys/callout.h>
 
 /*
  * F-Stack DP-RT-2026-06-01: forward declarations for rtbridge no-op stubs.
@@ -149,7 +150,19 @@ void buf_ring_free(struct buf_ring *br, struct malloc_type *type)
 void callout_when(sbintime_t sbt, sbintime_t precision, int flags, sbintime_t *sbt_out, sbintime_t *precision_out);
 void callout_when(sbintime_t sbt, sbintime_t precision, int flags, sbintime_t *sbt_out, sbintime_t *precision_out)
 {
-    
+    /* This used to be an empty stub, which left the caller's deadline
+     * untouched. tcp_timer_activate() feeds the result straight into
+     * tcp_timer_next(); with t_timers[] stuck at SBT_MAX it concluded no
+     * timer was pending and called callout_stop() instead -- so no TCP
+     * connection ever armed an RTO/delack/keepalive and any packet loss
+     * hung the connection forever. Convert the relative request to an
+     * absolute uptime deadline like the real kern_timeout.c does. */
+    if ((flags & C_ABSOLUTE) == 0)
+        sbt += sbinuptime();
+    if (sbt_out != NULL)
+        *sbt_out = sbt;
+    if (precision_out != NULL)
+        *precision_out = precision;
 }
 
 vm_paddr_t dump_avail[16] = {0};

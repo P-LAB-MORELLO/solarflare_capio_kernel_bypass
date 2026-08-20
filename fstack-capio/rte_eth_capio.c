@@ -39,6 +39,7 @@
 #define CAPIO_MAX_BURST     32
 /* Room for the EF10 RX prefix the NIC writes ahead of the frame. */
 #define CAPIO_RX_PREFIX     SFC7120_EF10_RX_PREFIX_LEN
+#define CAPIO_MIN_TX_FRAME  60   /* EF10 does not auto-pad runt frames */
 
 struct capio_internals;
 
@@ -347,10 +348,41 @@ eth_capio_tx(void *q, struct rte_mbuf **bufs, uint16_t nb_bufs)
         struct rte_mbuf *m = bufs[i];
         uint32_t len = rte_pktmbuf_pkt_len(m);
 
-        /* Single-segment only: the CAPIO TX descriptor takes one bus address.
-         * F-Stack is configured without TX_MULTI_SEGS, so this holds. */
+        /* The CAPIO TX descriptor takes one bus address. TCP output of large
+         * writes produces CHAINED mbufs (a 64KB response stalls mid-transfer
+         * when the first chained segment appears); dropping them silently
+         * wedges the connection in permanent retransmit. Linearize the rare
+         * chain through the copying post instead. */
         if (unlikely(m->nb_segs != 1)) {
-            txq->tx_dropped++;
+            static int mseg_prints;
+            if (mseg_prints < 8) {
+                mseg_prints++;
+                fprintf(stderr, "MSEG-DBG nb_segs=%u pkt_len=%u\n",
+                    (unsigned)m->nb_segs, (unsigned)m->pkt_len);
+                fflush(stderr);
+            }
+            uint8_t linbuf[SFC7120_TX_BUFFER_SIZE];
+            struct rte_mbuf *seg;
+            size_t off = 0;
+            if (m->pkt_len <= sizeof(linbuf)) {
+                for (seg = m; seg != NULL; seg = seg->next) {
+                    rte_memcpy(linbuf + off,
+                               rte_pktmbuf_mtod(seg, void *), seg->data_len);
+                    off += seg->data_len;
+                }
+                if (off < CAPIO_MIN_TX_FRAME) {
+                    memset(linbuf + off, 0, CAPIO_MIN_TX_FRAME - off);
+                    off = CAPIO_MIN_TX_FRAME;
+                }
+                if (sfc7120_tx_post(&pi->sfc, linbuf, off) == 0) {
+                    txq->tx_pkts++;
+                    txq->tx_bytes += off;
+                } else {
+                    txq->tx_dropped++;
+                }
+            } else {
+                txq->tx_dropped++;
+            }
             rte_pktmbuf_free(m);
             continue;
         }
@@ -358,7 +390,6 @@ eth_capio_tx(void *q, struct rte_mbuf **bufs, uint16_t nb_bufs)
         /* EF10 does not auto-pad runts. Short frames (ARP is 42B) must be
          * padded to the 60B minimum or the peer NIC discards them and ARP
          * never resolves. Rare frames, so the copy is free. */
-#define CAPIO_MIN_TX_FRAME 60
         if (len < CAPIO_MIN_TX_FRAME) {
             uint8_t padbuf[CAPIO_MIN_TX_FRAME];
             memset(padbuf, 0, sizeof(padbuf));
@@ -522,12 +553,13 @@ eth_dev_info(struct rte_eth_dev *dev __rte_unused,
     dev_info->rx_offload_capa = RTE_ETH_RX_OFFLOAD_IPV4_CKSUM |
                                 RTE_ETH_RX_OFFLOAD_UDP_CKSUM |
                                 RTE_ETH_RX_OFFLOAD_TCP_CKSUM;
-    /* TX csum offload NOT advertised: the kernel stub's INIT_TXQ runs with
-     * checksum insertion disabled (rawB's frozen config), so advertising it
-     * makes the stack emit zero checksums that no hardware fills in --
-     * invisible to pktgen, fatal against any real peer (kernel drops every
-     * reply as bad-cksum). Software checksums cost ~1.5% ceiling. */
-    dev_info->tx_offload_capa = 0;
+    /* INIT_TXQ runs with checksum insertion enabled (flags 0), so the NIC
+     * fills in IP/TCP/UDP checksums on every TX packet; advertise it so the
+     * stack skips per-byte software in_cksum (matches the stock sfc PMD's
+     * configuration on the hybrid arm). */
+    dev_info->tx_offload_capa = RTE_ETH_TX_OFFLOAD_IPV4_CKSUM |
+                                RTE_ETH_TX_OFFLOAD_UDP_CKSUM |
+                                RTE_ETH_TX_OFFLOAD_TCP_CKSUM;
     return 0;
 }
 

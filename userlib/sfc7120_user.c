@@ -1,5 +1,17 @@
 #include "sfc7120_user.h"
 
+/* The control-path ioctls must reach the kernel even when the embedding
+ * application interposes SFC_IOCTL() (F-Stack nginx does, to route data-path
+ * fds into the userspace stack). __sys_ioctl is the raw libc syscall stub
+ * and cannot be captured by application-level symbol definitions. */
+/* NOTE: the raw stub takes exactly three arguments (syscalls.master:
+ * int ioctl(int, u_long, caddr_t)); declaring it variadic garbles the data
+ * capability under the purecap calling convention -> kernel sees a bogus
+ * address and every ioctl returns EFAULT. */
+extern int __sys_ioctl(int fd, unsigned long request, void *data);
+#define SFC_IOCTL __sys_ioctl
+
+
 #include <fcntl.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -36,7 +48,7 @@ map_region(sfc7120_if_t *sfc, sfc7120_vm_map_type_t map_type,
     length_req.fd       = sfc->fd;
     length_req.map_type = (int)map_type;
 
-    if (ioctl(sfc->modmap_fd, MODMAPIOC_GET_SLICES, &length_req) < 0) {
+    if (SFC_IOCTL(sfc->modmap_fd, MODMAPIOC_GET_SLICES, &length_req) < 0) {
         perror("sfc7120: MODMAPIOC_GET_SLICES failed");
         return NULL;
     }
@@ -81,7 +93,7 @@ map_region(sfc7120_if_t *sfc, sfc7120_vm_map_type_t map_type,
     req.pos   = 0;
     req.extra = (void * __capability)(&map_req);
 
-    if (ioctl(sfc->modmap_fd, MODMAPIOC_MAP, &req) < 0) {
+    if (SFC_IOCTL(sfc->modmap_fd, MODMAPIOC_MAP, &req) < 0) {
         perror("sfc7120: MODMAPIOC_MAP failed");
         free(slices);
         return NULL;
@@ -154,7 +166,7 @@ sfc7120_init(sfc7120_if_t *sfc)
     }
     sfc->cap_req.user_cap = sfc->cap_token;
 
-    if (ioctl(sfc->fd, CAPIO_ATTACH, &sfc->cap_req) < 0) { // the above random page is used as part of capio_attach 
+    if (SFC_IOCTL(sfc->fd, CAPIO_ATTACH, &sfc->cap_req) < 0) { // the above random page is used as part of capio_attach 
         perror("sfc7120_init: CAPIO_ATTACH");
         goto fail;
     }
@@ -214,7 +226,7 @@ sfc7120_init(sfc7120_if_t *sfc)
     /* Phase C: VI geometry — DMA bus addresses, instances, head pointers */
     sfc->vi_info.user_cap   = sfc->cap_req.user_cap;
     sfc->vi_info.sealed_cap = sfc->cap_req.sealed_cap;
-    if (ioctl(sfc->fd, SFC7120_GET_VI_INFO, &sfc->vi_info) < 0) {
+    if (SFC_IOCTL(sfc->fd, SFC7120_GET_VI_INFO, &sfc->vi_info) < 0) {
         perror("sfc7120_init: SFC7120_GET_VI_INFO");
         goto fail;
     }
@@ -240,7 +252,8 @@ sfc7120_init(sfc7120_if_t *sfc)
     sfc7120_mac_req_t mac_req;
     mac_req.user_cap   = sfc->cap_req.user_cap;
     mac_req.sealed_cap = sfc->cap_req.sealed_cap;
-    if (ioctl(sfc->fd, SFC7120_GET_MAC, &mac_req) < 0) {
+    fprintf(stderr, "GETMAC-DBG fd=%d req=%#p ucap=%#p scap=%#p sfc=%#p\n", sfc->fd, (void *)&mac_req, (void *)mac_req.user_cap, (void *)mac_req.sealed_cap, (void *)sfc);
+    if (SFC_IOCTL(sfc->fd, SFC7120_GET_MAC, &mac_req) < 0) {
         perror("sfc7120_init: SFC7120_GET_MAC");
         goto fail;
     }
@@ -271,7 +284,7 @@ sfc7120_tx(sfc7120_if_t *sfc, const void *buf, size_t len)
     req.length      = len;
     req.status      = 0;
 
-    if (ioctl(sfc->fd, SFC7120_TX, &req) < 0) {
+    if (SFC_IOCTL(sfc->fd, SFC7120_TX, &req) < 0) {
         perror("sfc7120_tx: SFC7120_TX");
         return -1;
     }
@@ -297,7 +310,7 @@ sfc7120_rx(sfc7120_if_t *sfc, void *buf, size_t *len_out)
     req.status          = 0;
     req.error           = 0;
 
-    if (ioctl(sfc->fd, SFC7120_RX, &req) < 0) {
+    if (SFC_IOCTL(sfc->fd, SFC7120_RX, &req) < 0) {
         perror("sfc7120_rx: SFC7120_RX");
         return -1;
     }
@@ -865,7 +878,7 @@ sfc7120_destroy(sfc7120_if_t *sfc)
         sync_req.evq_read_ptr = sfc->evq_read_ptr;
         sync_req.tx_head      = sfc->tx_head;
         sync_req.rx_head      = sfc->rx_head;
-        if (ioctl(sfc->fd, SFC7120_SET_EVQ_RPTR, &sync_req) < 0)
+        if (SFC_IOCTL(sfc->fd, SFC7120_SET_EVQ_RPTR, &sync_req) < 0)
             perror("sfc7120_destroy: SFC7120_SET_EVQ_RPTR");
     }
 
@@ -873,7 +886,7 @@ sfc7120_destroy(sfc7120_if_t *sfc)
      * vm_map_remove fallback finds the ranges already unmapped and no-ops.
      * Must run while sfc->fd is still open and before freeing cap_token. */
     if (sfc->fd >= 0)
-        (void)ioctl(sfc->fd, CAPIO_GOODBYE, &sfc->cap_req);
+        (void)SFC_IOCTL(sfc->fd, CAPIO_GOODBYE, &sfc->cap_req);
 
     if (sfc->mmio_slices != NULL) {
         free(sfc->mmio_slices);
