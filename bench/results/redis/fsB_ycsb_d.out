@@ -1,0 +1,50 @@
+/usr/bin/java  -classpath /home/devel/Documents/cheri_workspace/sfc_bench/ycsb-redis-binding-0.17.0/conf:/home/devel/Documents/cheri_workspace/sfc_bench/ycsb-redis-binding-0.17.0/lib/commons-pool2-2.4.2.jar:/home/devel/Documents/cheri_workspace/sfc_bench/ycsb-redis-binding-0.17.0/lib/core-0.17.0.jar:/home/devel/Documents/cheri_workspace/sfc_bench/ycsb-redis-binding-0.17.0/lib/HdrHistogram-2.1.4.jar:/home/devel/Documents/cheri_workspace/sfc_bench/ycsb-redis-binding-0.17.0/lib/htrace-core4-4.1.0-incubating.jar:/home/devel/Documents/cheri_workspace/sfc_bench/ycsb-redis-binding-0.17.0/lib/jackson-core-asl-1.9.4.jar:/home/devel/Documents/cheri_workspace/sfc_bench/ycsb-redis-binding-0.17.0/lib/jackson-mapper-asl-1.9.4.jar:/home/devel/Documents/cheri_workspace/sfc_bench/ycsb-redis-binding-0.17.0/lib/jedis-2.9.0.jar:/home/devel/Documents/cheri_workspace/sfc_bench/ycsb-redis-binding-0.17.0/lib/redis-binding-0.17.0.jar site.ycsb.Client -t -db site.ycsb.db.RedisClient -s -P workloads/workloadd -p redis.host=10.0.1.2 -p redis.port=6379 -p recordcount=50000 -p operationcount=100000 -threads 8
+Command line: -t -db site.ycsb.db.RedisClient -s -P workloads/workloadd -p redis.host=10.0.1.2 -p redis.port=6379 -p recordcount=50000 -p operationcount=100000 -threads 8
+YCSB Client 0.17.0
+
+Loading workload...
+Starting test.
+DBWrapper: report latency for each error is false and specific error codes to track for latency are: []
+DBWrapper: report latency for each error is false and specific error codes to track for latency are: []
+DBWrapper: report latency for each error is false and specific error codes to track for latency are: []
+DBWrapper: report latency for each error is false and specific error codes to track for latency are: []
+DBWrapper: report latency for each error is false and specific error codes to track for latency are: []
+DBWrapper: report latency for each error is false and specific error codes to track for latency are: []
+DBWrapper: report latency for each error is false and specific error codes to track for latency are: []
+DBWrapper: report latency for each error is false and specific error codes to track for latency are: []
+2026-08-20 07:51:12:185 0 sec: 49 operations; ∞ current ops/sec; est completion in 0 second [READ: Count=88, Max=13599, Min=92, Avg=1431.57, 90=4291, 99=12047, 99.9=13599, 99.99=13599] [INSERT: Count=19, Max=8639, Min=294, Avg=1568.16, 90=3195, 99=8639, 99.9=8639, 99.99=8639] 
+2026-08-20 07:51:13:560 1 sec: 100000 operations; 70141.05 current ops/sec; [READ: Count=94953, Max=15391, Min=27, Avg=93.68, 90=119, 99=299, 99.9=2771, 99.99=5795] [CLEANUP: Count=8, Max=608, Min=46, Avg=132.5, 90=87, 99=608, 99.9=608, 99.99=608] [INSERT: Count=4940, Max=7099, Min=71, Avg=244.6, 90=329, 99=1440, 99.9=3443, 99.99=7099] 
+[OVERALL], RunTime(ms), 1425
+[OVERALL], Throughput(ops/sec), 70175.43859649122
+[TOTAL_GCS_G1_Young_Generation], Count, 5
+[TOTAL_GC_TIME_G1_Young_Generation], Time(ms), 17
+[TOTAL_GC_TIME_%_G1_Young_Generation], Time(%), 1.1929824561403508
+[TOTAL_GCS_G1_Concurrent_GC], Count, 0
+[TOTAL_GC_TIME_G1_Concurrent_GC], Time(ms), 0
+[TOTAL_GC_TIME_%_G1_Concurrent_GC], Time(%), 0.0
+[TOTAL_GCS_G1_Old_Generation], Count, 0
+[TOTAL_GC_TIME_G1_Old_Generation], Time(ms), 0
+[TOTAL_GC_TIME_%_G1_Old_Generation], Time(%), 0.0
+[TOTAL_GCs], Count, 5
+[TOTAL_GC_TIME], Time(ms), 17
+[TOTAL_GC_TIME_%], Time(%), 1.1929824561403508
+[READ], Operations, 95041
+[READ], AverageLatency(us), 94.92154964699445
+[READ], MinLatency(us), 27
+[READ], MaxLatency(us), 15391
+[READ], 95thPercentileLatency(us), 140
+[READ], 99thPercentileLatency(us), 308
+[READ], Return=OK, 95041
+[CLEANUP], Operations, 8
+[CLEANUP], AverageLatency(us), 132.5
+[CLEANUP], MinLatency(us), 46
+[CLEANUP], MaxLatency(us), 608
+[CLEANUP], 95thPercentileLatency(us), 608
+[CLEANUP], 99thPercentileLatency(us), 608
+[INSERT], Operations, 4959
+[INSERT], AverageLatency(us), 249.67493446259326
+[INSERT], MinLatency(us), 71
+[INSERT], MaxLatency(us), 8639
+[INSERT], 95thPercentileLatency(us), 517
+[INSERT], 99thPercentileLatency(us), 1546
+[INSERT], Return=OK, 4959

@@ -13,9 +13,13 @@ average over sweep cycles.
 | A (50/50 rw) | 77280 | 77101 | 44783 |
 | B (95/5)     | 88339 | 73801 | 66225 |
 | C (read-only)| 92851 | 72674 | 42265 |
+| D (read-latest) | 83472 | 70175 | 62073 |
 | F (rmw)      | 55804 | 53879 | 48008 |
 
-fsB reaches 99.8% of fsA on workload A and 96.6% on F.
+fsB reaches 99.8% of fsA on workload A and 96.6% on F. Workload E (short
+scans) is omitted: redis has no native range scan, so the YCSB binding
+emulates it with a sorted-set index plus one HGETALL per scanned record,
+which benchmarks the emulation rather than the stack.
 
 ## memtier_benchmark (2 threads x 4 conns, 20s cells, ops/sec totals)
 
