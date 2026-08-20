@@ -3,6 +3,8 @@
 ab (ApacheBench) from the Fedora client against F-Stack nginx 1.28.0 on Morello,
 single worker pinned to core 3, files of zeros served from html/.
 Cells: {1KB, 48KB, 64KB} x {c1, c8} x {keepalive off, on}.
+`nginx_results.csv` holds every cell as one row (fsBrev appears twice,
+pass 1 and pass 2; filter `steady_state == 1` for the table below).
 fsBrev files are the steady-state second pass (`*_p1.txt` = first pass);
 revocation throughput depends on cumulative allocation churn, so fresh-process
 numbers are much higher and unrepresentative.
