@@ -1325,11 +1325,17 @@ sfc7120_mcdi_init_txq(sfc7120_softc_t *sc, uint32_t instance,
      *   FLAG_TCP_CSUM_DIS    (bit 2) = 1 — disable TCP/UDP csum offload
      * All other bits (TCP_UDP_ONLY, CRC_MODE, TIMESTAMP, PACER_BYPASS,
      * INNER_*_CSUM_EN) left 0.
-     * Csum insertion is ENABLED (flags 0): the F-Stack arm serves TCP and
-     * pays per-byte software checksums otherwise, while the comparison arm
-     * (stock sfc PMD) offloads. The raw UDP arms are checksum-agnostic:
-     * insertion just rewrites their already-correct headers. */
+     * Csum insertion defaults ON (flags 0) for the TCP app benchmarks; the
+     * RFC2544 large-frame ladder needs it OFF (csum insertion induces a
+     * NIC-side standing queue at large frames, reproduced in the raw path).
+     * Tunable per boot: kenv hw.sfc7120pol.tx_csum=0 before kldload. */
     uint32_t flags = 0;
+    {
+        int tx_csum = 1;
+        TUNABLE_INT_FETCH("hw.sfc7120pol.tx_csum", &tx_csum);
+        if (tx_csum == 0)
+            flags = (1u << 1) | (1u << 2);
+    }
 
     uint8_t buf[MC_CMD_INIT_TXQ_IN_LEN(1)] = {0};
     *(uint32_t *)(buf + MC_CMD_INIT_TXQ_IN_SIZE_OFST)       = ndescs;
