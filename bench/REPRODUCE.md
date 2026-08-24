@@ -119,8 +119,20 @@ show near-zero drops, and the loss sits between stack input and echo
 output. Fix: net.inet.udp.recvspace=2000000 in [freebsd.sysctl]
 (0.52%/0.33% loss at 20%/30% of line, vs 3.27% default). Requires the
 ff_freebsd_init.c EINVAL-retry fix: integer config values are applied as
-4-byte writes and u_long sysctls reject them. The published grid keeps
-the default-configuration numbers.
+4-byte writes and u_long sysctls reject them.
+
+RESOLUTION (2026-08-24): all three F-Stack arms were rerun in full with
+recvspace=2MB (`rfc2544/rerun_bigbuf.sh`, rows `*_bigbuf` in the CSV,
+raw logs in `results/rfc2544_logs/`). The paper's figures now use the
+`*_bigbuf` rows. Verdict: the 1514B step vanishes on fsA and fsB (both
+sustain the 30% sweep ceiling, ~0.1-0.3% loss); every other column
+reproduces the old grid within run-to-run variation, INCLUDING all of
+the revocation arm's small-frame losses, which are therefore genuine
+poll-loop-stall drops at the NIC ring and not a buffering artifact.
+One knife-edge cell moved for the worse (fsA 128B@10%: 0.69% -> 2.57%
+with the cliff at 12% in both runs) - near-criterion variance, not a
+buffer effect. Default-configuration rows (`fsA_dpdk`, `fs*_txfix`)
+are retained for comparison.
 
 Diagnostic method (reusable): pktgen blasts line-rate frames during
 startup before the Lua script paces it, so bracketing DUT counters around
