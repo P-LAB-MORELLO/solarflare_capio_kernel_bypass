@@ -368,6 +368,17 @@ ff_freebsd_init(void)
         error = kernel_sysctlbyname(curthread, cur->name, NULL, NULL,
             cur->value, cur->vlen, NULL, 0);
 
+        /* Integer config values are parsed as 4-byte ints, but many
+         * sysctls are u_long/quad and reject a short write with EINVAL
+         * (e.g. net.inet.udp.recvspace). Retry once with the value
+         * widened to 8 bytes. */
+        if (error == EINVAL && cur->vlen == sizeof(int) &&
+            cur->value != (void *)cur->str) {
+            long wide = *(int *)cur->value;
+            error = kernel_sysctlbyname(curthread, cur->name, NULL, NULL,
+                &wide, sizeof(wide), NULL, 0);
+        }
+
         if (error != 0) {
             printf("kernel_sysctlbyname failed: %s=%s, error:%d\n",
                 cur->name, cur->str, error);

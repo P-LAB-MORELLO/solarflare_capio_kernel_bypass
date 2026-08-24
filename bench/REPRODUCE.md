@@ -106,3 +106,24 @@ Fresh-process numbers are up to 5x higher and unrepresentative.
 `results/*.csv`; `plots/make_nvme_figs.py` regenerates the NVMe figures
 from the `nvmepol` and `capio_sqlite` repositories' CSVs (paths at the top
 of each script).
+
+## Known artifact: 1514B frame loss step at >=20% of line (both F-Stack arms)
+
+Diagnosed 2026-08-24. FreeBSD's default UDP receive buffer
+(net.inet.udp.recvspace = 42080 bytes) holds only 28 maximum-size
+datagrams; a single 32-frame burst delivered between poll-loop drains
+overflows it (32 x 1472 = 47104 bytes). At 1280B a full burst fits, which
+is why no other frame size shows the step. Loss is a flat 1.1-3.3%
+independent of overload (unlike true saturation), NIC and PMD counters
+show near-zero drops, and the loss sits between stack input and echo
+output. Fix: net.inet.udp.recvspace=2000000 in [freebsd.sysctl]
+(0.52%/0.33% loss at 20%/30% of line, vs 3.27% default). Requires the
+ff_freebsd_init.c EINVAL-retry fix: integer config values are applied as
+4-byte writes and u_long sysctls reject them. The published grid keeps
+the default-configuration numbers.
+
+Diagnostic method (reusable): pktgen blasts line-rate frames during
+startup before the Lua script paces it, so bracketing DUT counters around
+a whole run is meaningless; align per-second CSTAT (CAPIO_STATS=1) and
+the MAC-stats sampler by rate signature and integrate over the steady
+window only.

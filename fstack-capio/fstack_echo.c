@@ -96,6 +96,15 @@ main(int argc, char *argv[])
     int on = 1;
     ff_ioctl(sockfd, FIONBIO, &on);
 
+    /* Diagnostic: lift the UDP receive buffer above the default 42080 so a
+     * full 32-frame burst of MTU-size datagrams (47104 bytes) cannot
+     * overflow it between poll-loop drains. */
+    {
+        int rcv = 2000000;
+        if (getenv("FF_ECHO_RCVBUF"))
+            ff_setsockopt(sockfd, SOL_SOCKET, SO_RCVBUF, &rcv, sizeof(rcv));
+    }
+
     memset(&addr, 0, sizeof(addr));
     addr.sin_family = AF_INET;
     addr.sin_addr.s_addr = htonl(INADDR_ANY);
