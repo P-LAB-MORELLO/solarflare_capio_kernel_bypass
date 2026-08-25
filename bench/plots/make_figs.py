@@ -158,11 +158,14 @@ fig_redis()
 print("figures written")
 
 # ---------------------------------------------- standard RFC2544 plot set
+# F-Stack arms use the *_bigbuf rows: same grid rerun with
+# net.inet.udp.recvspace=2MB after diagnosing the default 42KB buffer as
+# the source of the 1514B loss step (see paper text / bench/REPRODUCE.md).
 ARMS5 = (("rawA_dpdk", "DPDK raw (unsafe)", "#444444", "o", "-"),
          ("rawB_capio", "CAPIO raw", "#2a9d8f", "s", "-"),
-         ("fsA_dpdk", "F-Stack/DPDK (unsafe)", C_DPDK, "o", "--"),
-         ("fsB_txfix", "F-Stack/CAPIO", C_CAPIO, "s", "--"),
-         ("fsBrev_txfix", "F-Stack/CAPIO+revoke", C_REVOKE, "^", "--"))
+         ("fsA_bigbuf", "F-Stack/DPDK (unsafe)", C_DPDK, "o", "--"),
+         ("fsB_bigbuf", "F-Stack/CAPIO", C_CAPIO, "s", "--"),
+         ("fsBrev_bigbuf", "F-Stack/CAPIO+revoke", C_REVOKE, "^", "--"))
 SIZES = [64, 128, 256, 512, 1024, 1280, 1514]
 
 def _grid():
@@ -171,14 +174,19 @@ def _grid():
     with open(os.path.join(BENCH, "rfc2544_results.csv")) as f:
         for r in _csv.DictReader(f):
             k = (r["arm"], int(r["size"]))
-            if float(r["loss_pct"]) < 1.0:
+            # DUT-attributed loss: frames the generator's own NIC dropped on
+            # the return path (pktgen's imissed counter, recorded per trial)
+            # were successfully echoed by the DUT and are not charged to it.
+            tx, rx = int(r["tx"]), int(r["rx"])
+            im = int(r["imissed"] or 0)
+            dloss = max(0, tx - rx - im) / tx * 100.0
+            if dloss < 1.0:
                 best[k] = max(best.get(k, 0.0), float(r["pct"]))
             else:
                 best.setdefault(k, 0.0)
             if float(r["pct"]) == 2.0:
                 lat[k] = (float(r["p50_us"]), float(r["p99_us"]))
-            loss.setdefault(k, []).append((float(r["pct"]),
-                                           float(r["loss_pct"])))
+            loss.setdefault(k, []).append((float(r["pct"]), dloss))
     for v in loss.values():
         v.sort()
     return best, lat, loss
@@ -200,7 +208,7 @@ def fig_tput():
                 lw=1.0, color=c, ls=ls, label=label)
     ax.set_xticks(range(len(SIZES)))
     ax.set_xticklabels([str(x) for x in SIZES], fontsize=6)
-    ax.set_xlabel("frame size (B)")
+    ax.set_xlabel("Ethernet frame size (B)")
     ax.set_ylabel("throughput\n(% of line rate)", fontsize=7)
     ax.set_yticks([0, 5, 15, 30])
     ax.set_ylim(-2, 33)
@@ -220,7 +228,7 @@ def fig_lat():
         ax.set_title(which, pad=2, fontsize=7)
         ax.set_xticks(range(len(SIZES)))
         ax.set_xticklabels([str(x) for x in SIZES], rotation=45, fontsize=5.5)
-        ax.set_xlabel("frame size (B)", fontsize=7)
+        ax.set_xlabel("Ethernet frame size (B)", fontsize=7)
         ax.set_yscale("log")
         ax.set_yticks([30, 60, 125, 250])
         ax.set_yticklabels(["30", "60", "125", "250"])

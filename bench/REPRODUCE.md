@@ -139,3 +139,15 @@ startup before the Lua script paces it, so bracketing DUT counters around
 a whole run is meaningless; align per-second CSTAT (CAPIO_STATS=1) and
 the MAC-stats sampler by rate signature and integrate over the steady
 window only.
+
+## Loss attribution
+
+The CSV's tx/rx/loss_pct columns are raw generator-side counts. The
+`imissed` column is the generator NIC's own receive-miss counter for the
+trial: returned frames the client dropped for lack of RX descriptors.
+Figures and paper claims use DUT-attributed loss, (tx - rx - imissed)/tx,
+because those frames were successfully echoed by the DUT. This matters in
+18 of 420 trials (clustered at 256B@5-6% and 512B@10%); worst case is
+rawB 256B@5%, where the raw 11.1% "loss" is 100% client-side (DUT-
+attributed 0.000%). No sustained-rate figure changes under attribution;
+the raw arms' worst DUT-attributed trial is 0.158% (DPDK) / 0.026% (CAPIO).
