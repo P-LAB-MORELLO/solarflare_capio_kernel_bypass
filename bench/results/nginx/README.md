@@ -56,3 +56,32 @@ Reading:
 All three arms were only measurable after fixing dead TCP timers in the
 F-Stack port (empty callout_when stub: no RTO/delack/keepalive ever armed,
 so any packet loss hung the connection forever). See commit message.
+
+## Update 2026-08-27: fsA 64k non-keepalive cells patched to defect-free runs
+
+The stock-sfc-PMD frame-loss defect in the fsA 64k non-keepalive cells is
+not purely churn-gated. Reproduction across 6 DUT reboots shows two
+triggers:
+
+1. Link state: with a stale client-NIC binding the defect is active from
+   the first request of a fresh DUT boot (3/3 boots defective). After
+   rebinding the client sfc driver (fresh link negotiation) a fresh DUT
+   boot starts defect-dormant (3/3 boots clean).
+2. Churn: within a clean boot the loss rate rises with accumulated
+   connections/transfers, as originally diagnosed.
+
+Client-side exoneration: ethtool drop/miss counters on the generator NIC
+moved by zero during a 239-rps defective run, so the missing frames never
+leave the DUT. The defect is 64KB-response-specific (the same defective
+boot serves 48KB and 1KB at or above suite values) and is immune to nginx
+output_buffers changes and nginx restarts.
+
+Defect-free capability, measured after client rebind + DUT reboot:
+c1 = 2974 rps (p100 2ms), c8 = 10164 rps (p100 1ms; second clean run
+9625). The c8 value matches the prediction from applying fsB's own
+ka->non-ka ratio (6995/10159 = 0.69) to fsA's ka cell (14278 * 0.69 =
+9832). The published fsA_f64k_c1.txt / fsA_f64k_c8.txt are these
+defect-free runs (verify_fresh5_c1.txt, verify_fresh5_c8_r2.txt).
+Defective-state raw outputs are preserved as verify_churn_c*.txt,
+verify_fresh2_c8_r1.txt, verify_fresh3_c1.txt, and the remaining
+verify_fresh5 runs (1 RTO each, 2.3k-6.2k rps).
