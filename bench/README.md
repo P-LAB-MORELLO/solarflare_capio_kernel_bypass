@@ -68,3 +68,12 @@ DUT loss. Compare arms on forwarded pps, not loss. The 64B rawB rows after
 the 128B wedge in the first ladder (`rawB_capio` at 128/256/512B) are
 100%-loss and superseded by the `_r2`/`_r3` reruns on a fresh daemon.
 The generator itself tops out near 8.3 Mpps at 64B (single TX core).
+
+Follow-up rows (2026-09-05): `rawA_dpdk_30s` repeats the rawA ladder with
+30 s trials (matches the 20 s ladder row for row). `rawB_capio_fc0` runs the
+CAPIO echo with MAC flow control OFF (`kenv hw.sfc7120pol.fcntl=0` before
+kldload; default 3 = auto, unchanged) and 30 s trials: the 64B ceiling is
+the same 4.79 Mpps but now a drop curve (42% loss at the generator's 8.3
+Mpps maximum), and at 256B the daemon wedges once offered load exceeds
+its ~4.8 Mpps per-packet capacity (90% of line), which pause had been
+masking. 128B/512B fc0 rows were not collected (DUT hung after the wedge).

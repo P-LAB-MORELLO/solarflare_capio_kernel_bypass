@@ -1672,12 +1672,23 @@ sfc7120_mcdi_set_mac(sfc7120_softc_t *sc)
 {
     uint8_t  buf[MC_CMD_SET_MAC_IN_LEN] = {0};
     int      rc;
+    /* Ethernet flow control mode handed to the MC: 0=off, 1=respond,
+     * 2=bidirectional, 3=auto-negotiate (default, matches sfxge). With
+     * AUTO the NIC emits PAUSE frames under RX overload, which throttles a
+     * pktgen load generator to the DUT drain rate and turns loss into
+     * queueing; the DPDK sfc baseline drops instead. Set
+     * kenv hw.sfc7120pol.fcntl=0 before kldload for drop-based ladders. */
+    int      fcntl = MC_CMD_FCNTL_AUTO;
+
+    TUNABLE_INT_FETCH("hw.sfc7120pol.fcntl", &fcntl);
+    if (fcntl < 0 || fcntl > MC_CMD_FCNTL_AUTO)
+        fcntl = MC_CMD_FCNTL_AUTO;
 
     *(uint32_t *)(buf + MC_CMD_SET_MAC_IN_MTU_OFST)    = SFC7120_DEFAULT_MAC_PDU;
     *(uint32_t *)(buf + MC_CMD_SET_MAC_IN_DRAIN_OFST)  = 0;
     memcpy(buf + MC_CMD_SET_MAC_IN_ADDR_OFST, sc->mac_addr, 6);
     *(uint32_t *)(buf + MC_CMD_SET_MAC_IN_REJECT_OFST) = 0;
-    *(uint32_t *)(buf + MC_CMD_SET_MAC_IN_FCNTL_OFST)  = MC_CMD_FCNTL_AUTO;
+    *(uint32_t *)(buf + MC_CMD_SET_MAC_IN_FCNTL_OFST)  = (uint32_t)fcntl;
     *(uint32_t *)(buf + MC_CMD_SET_MAC_IN_FLAGS_OFST)  = 0;
 
     rc = sfc7120_mcdi_exec(sc, MC_CMD_SET_MAC,
@@ -1696,10 +1707,10 @@ sfc7120_mcdi_set_mac(sfc7120_softc_t *sc)
 
     sc->mac_configured = true;
     device_printf(sc->dev,
-        "MC SET_MAC: addr=%02x:%02x:%02x:%02x:%02x:%02x mtu=%u fcntl=AUTO\n",
+        "MC SET_MAC: addr=%02x:%02x:%02x:%02x:%02x:%02x mtu=%u fcntl=%d\n",
         sc->mac_addr[0], sc->mac_addr[1], sc->mac_addr[2],
         sc->mac_addr[3], sc->mac_addr[4], sc->mac_addr[5],
-        SFC7120_DEFAULT_MAC_PDU);
+        SFC7120_DEFAULT_MAC_PDU, fcntl);
     return 0;
 }
 
