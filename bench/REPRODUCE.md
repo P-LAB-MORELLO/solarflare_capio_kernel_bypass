@@ -151,3 +151,56 @@ because those frames were successfully echoed by the DUT. This matters in
 rawB 256B@5%, where the raw 11.1% "loss" is 100% client-side (DUT-
 attributed 0.000%). No sustained-rate figure changes under attribution;
 the raw arms' worst DUT-attributed trial is 0.158% (DPDK) / 0.026% (CAPIO).
+
+## Capacity ceilings (rates above the 30% grid)
+
+What it measures: how many packets per second each raw arm can echo when
+you keep raising the offered rate past the paper's 30% cap. Results and
+their interpretation are in `README.md`, "Capacity ceilings".
+
+Client side, once:
+
+1. Build pktgen 24.03.1 with the histogram patch and Lua enabled. The
+   files in `pktgen-modified/app/` are drop-in replacements for that tag:
+
+       git clone https://github.com/pktgen/Pktgen-DPDK && cd Pktgen-DPDK
+       git checkout pktgen-24.03.1
+       cp <repo>/bench/pktgen-modified/app/*.{c,h} app/
+       meson setup build -Denable_lua=true && ninja -C build
+
+   Without `-Denable_lua=true` pktgen starts but silently ignores the
+   script ("please build with Lua enabled" in the log, no rows).
+2. Run `bench_env.sh` (C-states off) and bind the client PF0 to vfio-pci
+   as described above.
+
+Per arm:
+
+3. Launch the DUT exactly as for the RFC 2544 grid (recipes above). For a
+   CAPIO arm reboot the Morello box first; the stub cannot be unloaded and
+   only the first daemon after a load receives RX events.
+4. On the client:
+
+       PKTGEN_DIR=~/Pktgen-DPDK TRIAL_MS=30000 rfc2544/run_ceiling.sh <label>
+
+   Defaults sweep 64/128/256/512B at 30-100% of line rate. Override with
+   SIZES= and RATES=. Put 128B last for CAPIO arms.
+5. Watch the log while it runs:
+
+       grep -ao "LATLOAD <label> size=[^ ]* pct=[^ ]* .*rx=[0-9]*" \
+           results/rfc2544_logs/arm_<label>.log
+
+   If a row shows `rx=0`, the CAPIO echo has wedged. Kill pktgen at once
+   (`sudo pkill -9 -f 'app/pktgen -l'`). Flooding a wedged DUT has hung the
+   Morello kernel hard (console dead, not in ddb). Recovery: the board
+   controller CLI on `/dev/ttyUSB1` (115200 8N1) accepts `power reboot -d`;
+   the kernel console is `/dev/ttyUSB2`.
+6. Summarise and convert:
+
+       python3 rfc2544/analyze.py results/rfc2544_logs/arm_<label>.log
+       python3 rfc2544_to_csv.py results/rfc2544_logs/arm_*.log
+
+   (`rfc2544_to_csv.py` overwrites its CSV with only the logs given.)
+
+Stub tunable: `kenv hw.sfc7120pol.fcntl=<0|1|2|3>` before kldload sets the
+NIC's Ethernet flow-control mode (0 off, 3 auto = default). Leave it at the
+default for benchmarks; 0 is diagnostic only (see README, "Flow control").
