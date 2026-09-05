@@ -77,3 +77,12 @@ the same 4.79 Mpps but now a drop curve (42% loss at the generator's 8.3
 Mpps maximum), and at 256B the daemon wedges once offered load exceeds
 its ~4.8 Mpps per-packet capacity (90% of line), which pause had been
 masking. 128B/512B fc0 rows were not collected (DUT hung after the wedge).
+
+Control (rows `rawB_capio_fc0b`, `rawB_capio_ctl_fc3`): with flow control
+OFF the CAPIO echo shows a ring-sized standing backlog at 512B even at 30%
+offered and wedges at 50% (1.18 Mpps), far below its per-packet ceiling;
+the same rebuilt stub at the default fcntl=3 runs 512B to line rate with
+56 us p50 and no wedge. The fcntl=0 anomaly is not root-caused, so the
+tunable is diagnostic only; the one conclusion that survives it is that
+the 64B ceiling (4.8 Mpps) is identical with pause on or off. For a
+symmetric drop-based comparison, enable pause on the DPDK arm instead.

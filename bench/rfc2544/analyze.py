@@ -21,7 +21,7 @@ for (arm, size), lst in by.items():
     for pct, kv in lst:
         tx, rx, im = int(kv["tx"]), int(kv["rx"]), int(kv["imissed"])
         dut = max(0.0, (tx - rx - im) * 100.0 / tx) if tx else 0
-        dur = 20.0
+        dur = 20.0 if arm in ("rawA_dpdk", "rawB_capio", "rawB_capio_r2", "rawB_capio_r3") else 30.0
         fwd = (rx + im) / dur
         best = max(best, fwd)
         print(f"{pct:5.0f} {int(kv['off_pps'])/1e6:9.3f} {fwd/1e6:9.3f} {fwd*100/LINE[size]:6.1f} {dut:9.3f} {float(kv['loss']):9.3f} {im:8d} {float(kv['p50']):6.0f} {float(kv['p99']):7.0f}")
