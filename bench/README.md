@@ -47,3 +47,24 @@ pktgen histogram (`pktgen-latency-histogram.patch`, 2us buckets).
    kldunload the CAPIO stub, its teardown panics the kernel).
 3. `LABEL=<arm> SIZES=... RATES=... rfc2544/run_arm.sh <arm>` drives
    `rfc2544/latload.lua`; `../rfc2544_to_csv.py` merges arm logs to CSV.
+
+## Raw-arm capacity ceilings (above the 30% cap)
+
+`results/raw_ceiling_results.csv` extends the raw arms to 30-100% of line
+rate (20 s trials, `rfc2544/run_ceiling.sh`, summarise with
+`rfc2544/analyze.py`). DUT-attributed max forwarded rate:
+
+| frame | rawA (DPDK testpmd) | rawB (CAPIO echo) |
+|-------|---------------------|-------------------|
+| 64B   | 6.98 Mpps (47% line), loss cliff past 45% offered | 4.77 Mpps (32% line), flat at every offered rate |
+| 128B  | 6.96 Mpps (82% line) | RX wedge at >=3.0 Mpps offered (rows `rawB_capio_r2`) |
+| 256B  | 99.9% line, zero loss | 99.9% line, 0.003% loss (rows `rawB_capio_r3`) |
+| 512B  | 100% line, zero loss | 100% line, 0.003% loss |
+
+The CAPIO stub enables MAC flow control (FCNTL_AUTO), so under overload the
+NIC pauses the generator instead of dropping: rawB 64B rows show
+offered == forwarded == 4.77 Mpps with a ~516 us standing queue and <0.1%
+DUT loss. Compare arms on forwarded pps, not loss. The 64B rawB rows after
+the 128B wedge in the first ladder (`rawB_capio` at 128/256/512B) are
+100%-loss and superseded by the `_r2`/`_r3` reruns on a fresh daemon.
+The generator itself tops out near 8.3 Mpps at 64B (single TX core).
