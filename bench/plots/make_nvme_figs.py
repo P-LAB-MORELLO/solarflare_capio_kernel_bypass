@@ -88,7 +88,7 @@ def fig_tpch():
                      if q not in ("q13", "q14", "q22")
                      and min(data[b][q] for b in
                              ("spdk", "capio", "unix_direct")) > 0.01)
-    fig, ax = plt.subplots(figsize=(7.2, 1.9))
+    fig, ax = plt.subplots(figsize=(7.2, 2.05))
     w = 0.27
     for k, (key, label, color) in enumerate(backends):
         xs = [i + (k - 1) * w for i in range(len(queries))]
@@ -102,16 +102,16 @@ def fig_tpch():
                                    (2, "unix_direct", C_KERNEL, "{:.1f}x")):
             ratio = data[key][q] / data["spdk"][q]
             ax.text(i + (k - 1) * w, data[key][q] * 1.18, fmt.format(ratio),
-                    ha="center", va="bottom", fontsize=4.6, color=color,
-                    rotation=90)
-    ax.text(0.0, 1.02, "numbers above bars: wall time relative to SPDK "
+                    ha="center", va="bottom", fontsize=5.6, color=color,
+                    fontweight="bold", rotation=90)
+    ax.text(0.0, 1.02, "bold numbers: wall time relative to SPDK "
             "(SPDK = 1x)", transform=ax.transAxes, ha="left", va="bottom",
-            fontsize=6, color="#555555")
+            fontsize=6.5, color="#333333")
     ax.set_yscale("log")
     ax.set_yticks([1, 10, 100, 1000])
     ax.set_yticklabels(["1", "10", "100", "1000"])
     ax.minorticks_off()
-    ax.set_ylim(top=12000)
+    ax.set_ylim(top=15000)
     ax.set_ylabel("wall time (s)")
     ax.set_xticks(range(len(queries)))
     ax.set_xticklabels(queries, fontsize=6.5)
