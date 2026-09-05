@@ -88,27 +88,35 @@ def fig_tpch():
                      if q not in ("q13", "q14", "q22")
                      and min(data[b][q] for b in
                              ("spdk", "capio", "unix_direct")) > 0.01)
-    fig, ax = plt.subplots(figsize=(7.2, 1.7))
+    fig, ax = plt.subplots(figsize=(7.2, 1.9))
     w = 0.27
     for k, (key, label, color) in enumerate(backends):
         xs = [i + (k - 1) * w for i in range(len(queries))]
         ax.bar(xs, [data[key][q] for q in queries], width=w, color=color,
                label=label)
-    # annotate kernel/SPDK slowdown over each query group
+    # Label the CAPIO and kernel bars with their wall time relative to the
+    # SPDK bar of the same query, in the series colour, so the reader can
+    # tell what each number is a ratio of without consulting the caption.
     for i, q in enumerate(queries):
-        ratio = data["unix_direct"][q] / data["spdk"][q]
-        ax.text(i, data["unix_direct"][q] * 1.25, f"{ratio:.1f}x",
-                ha="center", va="bottom", fontsize=4.8, color="#555555")
+        for k, key, color, fmt in ((1, "capio", C_CAPIO, "{:.2f}x"),
+                                   (2, "unix_direct", C_KERNEL, "{:.1f}x")):
+            ratio = data[key][q] / data["spdk"][q]
+            ax.text(i + (k - 1) * w, data[key][q] * 1.18, fmt.format(ratio),
+                    ha="center", va="bottom", fontsize=4.6, color=color,
+                    rotation=90)
+    ax.text(0.0, 1.02, "numbers above bars: wall time relative to SPDK "
+            "(SPDK = 1x)", transform=ax.transAxes, ha="left", va="bottom",
+            fontsize=6, color="#555555")
     ax.set_yscale("log")
     ax.set_yticks([1, 10, 100, 1000])
     ax.set_yticklabels(["1", "10", "100", "1000"])
     ax.minorticks_off()
-    ax.set_ylim(top=4000)
+    ax.set_ylim(top=12000)
     ax.set_ylabel("wall time (s)")
     ax.set_xticks(range(len(queries)))
     ax.set_xticklabels(queries, fontsize=6.5)
     ax.legend(frameon=False, ncol=3, loc="upper center",
-              bbox_to_anchor=(0.5, 1.16), fontsize=6.5, columnspacing=1.0,
+              bbox_to_anchor=(0.5, 1.22), fontsize=6.5, columnspacing=1.0,
               handlelength=1.4)
     fig.tight_layout(pad=0.4)
     fig.savefig(os.path.join(HERE, "tpch_three_way_sf1.pdf"))
