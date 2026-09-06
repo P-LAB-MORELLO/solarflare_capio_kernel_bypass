@@ -70,6 +70,58 @@ def fig_micro():
                 pad_inches=0.02)
     plt.close(fig)
 
+# ------------------------------------------------------------ NVMe QD sweep
+def fig_qd():
+    """IOPS and mean latency versus queue depth (1, 8, 32, 128) for the four
+    storage stacks, 4 KB random reads (top row) and writes (bottom row).
+    Data: nvmepol/results_qd.csv (config,operation,qd,iops,...)."""
+    rows = {}
+    with open(os.path.join(WS, "nvmepol/results_qd.csv")) as f:
+        for r in csv.DictReader(f):
+            if r["iops"] == "ERROR":
+                continue
+            rows[(r["config"], r["operation"], int(r["qd"]))] = r
+    configs = (("SPDK-bypass", "SPDK (unsafe)", C_UNSAFE),
+               ("kernel-nvme4", "kernel nvme(4)", C_KERNEL),
+               ("CAPIO-unsliced", "CAPIO unsliced", C_UNSL),
+               ("CAPIO-sliced", "CAPIO sliced", C_CAPIO))
+    qds = sorted({k[2] for k in rows})
+    ops = (("randread", "read"), ("randwrite", "write"))
+    fig, axes = plt.subplots(2, 3, figsize=(7.2, 3.0), sharex=True)
+    panels = (("IOPS (thousands)", lambda r: float(r["iops"]) / 1e3),
+              ("mean latency (µs)", lambda r: float(r["mean_us"])),
+              ("p99 latency (µs)", lambda r: float(r["p99_us"])))
+    markers = ("o", "s", "^", "D")
+    for row, (op, opname) in enumerate(ops):
+        for col, (ylabel, get) in enumerate(panels):
+            ax = axes[row][col]
+            for k, (key, label, color) in enumerate(configs):
+                xs = [q for q in qds if (key, op, q) in rows]
+                ys = [get(rows[(key, op, q)]) for q in xs]
+                ax.plot(xs, ys, marker=markers[k], ms=3.4, lw=1.0, color=color,
+                        label=label if (row == 0 and col == 0) else None)
+            ax.set_xscale("log", base=2)
+            ax.set_xticks(qds)
+            ax.set_xticklabels([str(q) for q in qds], fontsize=7)
+            ax.minorticks_off()
+            if col > 0:
+                ax.set_yscale("log")
+            ax.tick_params(axis="y", labelsize=7)
+            if row == 0:
+                ax.set_title(ylabel, fontsize=8, pad=3)
+            if col == 0:
+                ax.set_ylabel(f"random 4 KB {opname}", fontsize=8, labelpad=2)
+            if row == 1:
+                ax.set_xlabel("queue depth", fontsize=8, labelpad=2)
+    h, l = axes[0][0].get_legend_handles_labels()
+    fig.legend(h, l, frameon=False, ncol=4, loc="upper center",
+               bbox_to_anchor=(0.52, 1.0), fontsize=7.5, columnspacing=1.2,
+               handlelength=1.6, handletextpad=0.4)
+    fig.tight_layout(pad=0.4, rect=(0, 0, 1, 0.93), w_pad=0.8, h_pad=0.5)
+    fig.savefig(os.path.join(HERE, "nvme_qd.pdf"), bbox_inches="tight",
+                pad_inches=0.02)
+    plt.close(fig)
+
 # --------------------------------------------------------------------- TPC-H
 def fig_tpch():
     data = {}
@@ -123,5 +175,7 @@ def fig_tpch():
     plt.close(fig)
 
 fig_micro()
+if os.path.exists(os.path.join(WS, "nvmepol/results_qd.csv")):
+    fig_qd()
 fig_tpch()
 print("nvme figures written")
