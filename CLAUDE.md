@@ -619,7 +619,7 @@ doorbells at their **absolute per-VI window offsets** (`base +
 
 | Register | Offset | Direction | Notes |
 |---|---|---|---|
-| `MC_DOORBELL` | `0x0200` | RW | Kicks MCDI requests (low word) |
+| (slot 0) `RESERVED0_HW_REV_ID` | `0x0000` | RO | Placeholder keeping slice indices stable; formerly the MC doorbell low word, which must not be exposed |
 | `DATA_EVQ_RPTR_DBL` | `0x2400` | RW | Ack data-EVQ (instance 1) events |
 | `RX_DESC_DBL` | `0x0830` | RW | Push RX descriptor producer pointer |
 | `TX_DESC_DBL` | `0x0a10` (12 B) | RW | TX push; `+8` = WPTR-only |

@@ -283,7 +283,7 @@ kernel pointer and unusable).
 IOCTLs: `CAPIO_ATTACH` / `CAPIO_GOODBYE` (capio.h), `SFC7120_TX` / `SFC7120_RX` /
 `SFC7120_GET_MAC` / `SFC7120_GET_VI_INFO` (`../sfc7120_uapi.h`).
 
-Slice manifest (`../sfc7120_tables.c`, corrected in Phase B): `MC_DOORBELL`
+Slice manifest (`../sfc7120_tables.c`, corrected in Phase B): `RESERVED0_HW_REV_ID` (slot 0, formerly `MC_DOORBELL`, removed for security)
 (`0x200`), `DATA_EVQ_RPTR_DBL` (`0x2400` — instance 1's window),
 `RX_DESC_DBL` (`0x830`), `TX_DESC_DBL` (`0xa10`, 12 B), `HW_REV_ID` (RO).
 The control EVQ 0 RPTR (`0x400`) is deliberately not exposed — kernel-owned.

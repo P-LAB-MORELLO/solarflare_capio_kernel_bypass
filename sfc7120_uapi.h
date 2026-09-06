@@ -38,7 +38,7 @@ typedef enum {
  * cannot be dereferenced, so index is the lookup key.
  */
 typedef enum sfc7120_mmio_slice_idx {
-    SFC7120_SLICE_MC_DOORBELL = 0,     /* 0x0200 — MCDI kick (kernel use) */
+    SFC7120_SLICE_RESERVED0 = 0,       /* was the MC doorbell low word; now a RO alias of HW_REV_ID, unused */
     SFC7120_SLICE_DATA_EVQ_RPTR_DBL,   /* 0x2400 — data EVQ (instance 1) ack */
     SFC7120_SLICE_RX_DESC_DBL,         /* 0x0830 — RX producer push */
     SFC7120_SLICE_TX_DESC_DBL,         /* 0x0a10, 12 B (incl. +8 WPTR push) */

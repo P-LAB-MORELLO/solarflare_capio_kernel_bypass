@@ -29,7 +29,17 @@
  * must update that enum in lockstep.
  */
 slice_def_t sfc7120_reg_slices[] = {
-    { SFC7120_REG_MCDB,              "MC_DOORBELL",       false, 4 },
+    /*
+     * Slot 0 used to be the MC doorbell low word (0x0200). That register is
+     * half of the MCDI kick pair and must never reach userspace: alone it
+     * cannot fire a command (0x0204 is the trigger) but it can corrupt the
+     * mailbox address of an in-flight kernel command. Slice order is ABI
+     * (see sfc7120_uapi.h), and every userspace consumer links the userlib
+     * statically, so instead of deleting the entry and shifting the indices
+     * slot 0 is now a harmless read-only alias of HW_REV_ID. Nothing in
+     * userspace dereferences index 0.
+     */
+    { SFC7120_REG_BIU_HW_REV_ID,     "RESERVED0_HW_REV_ID", true, 4 },
     // { SFC7120_REG_MC_EVENT, "MC_EVENT", true, 4 },
     // Not a BAR register — MC events come via the EVQ DMA ring, not MMIO.
     /*
