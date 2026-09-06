@@ -87,7 +87,7 @@ def fig_qd():
                ("CAPIO-sliced", "CAPIO sliced", C_CAPIO))
     qds = sorted({k[2] for k in rows})
     ops = (("randread", "read"), ("randwrite", "write"))
-    fig, axes = plt.subplots(2, 3, figsize=(7.2, 3.0), sharex=True)
+    fig, axes = plt.subplots(2, 3, figsize=(7.2, 3.8), sharex=True)
     panels = (("IOPS (thousands)", lambda r: float(r["iops"]) / 1e3),
               ("mean latency (µs)", lambda r: float(r["mean_us"])),
               ("p99 latency (µs)", lambda r: float(r["p99_us"])))
@@ -98,26 +98,26 @@ def fig_qd():
             for k, (key, label, color) in enumerate(configs):
                 xs = [q for q in qds if (key, op, q) in rows]
                 ys = [get(rows[(key, op, q)]) for q in xs]
-                ax.plot(xs, ys, marker=markers[k], ms=3.4, lw=1.0, color=color,
+                ax.plot(xs, ys, marker=markers[k], ms=4.2, lw=1.2, color=color,
                         label=label if (row == 0 and col == 0) else None)
             ax.set_xscale("log", base=2)
             ax.set_xticks(qds)
-            ax.set_xticklabels([str(q) for q in qds], fontsize=7)
+            ax.set_xticklabels([str(q) for q in qds], fontsize=9)
             ax.minorticks_off()
             if col > 0:
                 ax.set_yscale("log")
-            ax.tick_params(axis="y", labelsize=7)
+            ax.tick_params(axis="y", labelsize=9)
             if row == 0:
-                ax.set_title(ylabel, fontsize=8, pad=3)
+                ax.set_title(ylabel, fontsize=10, pad=4)
             if col == 0:
-                ax.set_ylabel(f"random 4 KB {opname}", fontsize=8, labelpad=2)
+                ax.set_ylabel(f"4 KB {opname}", fontsize=10, labelpad=4)
             if row == 1:
-                ax.set_xlabel("queue depth", fontsize=8, labelpad=2)
+                ax.set_xlabel("queue depth", fontsize=10, labelpad=3)
     h, l = axes[0][0].get_legend_handles_labels()
     fig.legend(h, l, frameon=False, ncol=4, loc="upper center",
-               bbox_to_anchor=(0.52, 1.0), fontsize=7.5, columnspacing=1.2,
-               handlelength=1.6, handletextpad=0.4)
-    fig.tight_layout(pad=0.4, rect=(0, 0, 1, 0.93), w_pad=0.8, h_pad=0.5)
+               bbox_to_anchor=(0.52, 1.0), fontsize=9.5, columnspacing=1.4,
+               handlelength=1.8, handletextpad=0.5)
+    fig.tight_layout(pad=0.4, rect=(0, 0, 1, 0.92), w_pad=1.0, h_pad=1.2)
     fig.savefig(os.path.join(HERE, "nvme_qd.pdf"), bbox_inches="tight",
                 pad_inches=0.02)
     plt.close(fig)
