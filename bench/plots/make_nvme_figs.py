@@ -6,6 +6,7 @@ Data:
   TPC-H      : capio_sqlite/tpch_four_way_sf1.csv (three backends used here)
 """
 import csv
+import math
 import os
 
 import matplotlib
@@ -123,16 +124,13 @@ def fig_qd():
     plt.close(fig)
 
 # --------------------------------------------------------------------- TPC-H
-def fig_tpch():
+def _tpch_data():
     data = {}
     with open(os.path.join(WS, "capio_sqlite/tpch_four_way_sf1.csv")) as f:
         for r in csv.DictReader(f):
             if r["phase"] == "query":
                 data.setdefault(r["backend"], {})[r["name"]] = \
                     float(r["wall_s"])
-    backends = (("spdk", "SPDK (unsafe)", C_UNSAFE),
-                ("capio", "CAPIO (safe)", C_CAPIO),
-                ("unix_direct", "kernel FS (O_DIRECT)", C_KERNEL))
     # q13/q14/q22 need SQL dialect features SQLite lacks and fail on every
     # backend; exclude them as the text describes.
     queries = sorted(q for q in set(data["spdk"]) & set(data["capio"])
@@ -140,42 +138,82 @@ def fig_tpch():
                      if q not in ("q13", "q14", "q22")
                      and min(data[b][q] for b in
                              ("spdk", "capio", "unix_direct")) > 0.01)
-    fig, ax = plt.subplots(figsize=(7.2, 2.05))
+    return data, queries
+
+TPCH_BACKENDS = (("spdk", "SPDK (unsafe)", C_UNSAFE),
+                 ("capio", "CAPIO (safe)", C_CAPIO),
+                 ("unix_direct", "kernel FS (O_DIRECT)", C_KERNEL))
+
+def fig_tpch():
+    """Per-query wall time, three stacks, log scale. Wide and short so it
+    can span both columns; the ratios live in fig_tpch_slowdown."""
+    data, queries = _tpch_data()
+    fig, ax = plt.subplots(figsize=(7.2, 1.55))
     w = 0.27
-    for k, (key, label, color) in enumerate(backends):
+    for k, (key, label, color) in enumerate(TPCH_BACKENDS):
         xs = [i + (k - 1) * w for i in range(len(queries))]
         ax.bar(xs, [data[key][q] for q in queries], width=w, color=color,
                label=label)
-    # Label the CAPIO and kernel bars with their wall time relative to the
-    # SPDK bar of the same query, in the series colour, so the reader can
-    # tell what each number is a ratio of without consulting the caption.
-    for i, q in enumerate(queries):
-        for k, key, color, fmt in ((1, "capio", C_CAPIO, "{:.2f}x"),
-                                   (2, "unix_direct", C_KERNEL, "{:.1f}x")):
-            ratio = data[key][q] / data["spdk"][q]
-            ax.text(i + (k - 1) * w, data[key][q] * 1.18, fmt.format(ratio),
-                    ha="center", va="bottom", fontsize=5.6, color=color,
-                    fontweight="bold", rotation=90)
-    ax.text(0.0, 1.02, "bold numbers: wall time relative to SPDK "
-            "(SPDK = 1x)", transform=ax.transAxes, ha="left", va="bottom",
-            fontsize=6.5, color="#333333")
     ax.set_yscale("log")
     ax.set_yticks([1, 10, 100, 1000])
     ax.set_yticklabels(["1", "10", "100", "1000"])
     ax.minorticks_off()
-    ax.set_ylim(top=15000)
     ax.set_ylabel("wall time (s)")
     ax.set_xticks(range(len(queries)))
     ax.set_xticklabels(queries, fontsize=6.5)
+    ax.set_xlim(-0.6, len(queries) - 0.4)
     ax.legend(frameon=False, ncol=3, loc="upper center",
-              bbox_to_anchor=(0.5, 1.22), fontsize=6.5, columnspacing=1.0,
+              bbox_to_anchor=(0.5, 1.2), fontsize=6.5, columnspacing=1.0,
               handlelength=1.4)
     fig.tight_layout(pad=0.4)
     fig.savefig(os.path.join(HERE, "tpch_three_way_sf1.pdf"))
     plt.close(fig)
 
+def fig_tpch_slowdown():
+    """Per-query slowdown relative to SPDK (SPDK = 1, lower is better) for
+    the CAPIO and kernel stacks, plus a geometric-mean bar at the end."""
+    data, queries = _tpch_data()
+    series = [(key, label, color) for key, label, color in TPCH_BACKENDS
+              if key != "spdk"]
+    ratios = {key: [data[key][q] / data["spdk"][q] for q in queries]
+              for key, _, _ in series}
+    for key in ratios:
+        ratios[key].append(math.exp(sum(math.log(r) for r in ratios[key])
+                                    / len(queries)))
+    labels = queries + ["geo\nmean"]
+    n = len(labels)
+    fig, ax = plt.subplots(figsize=(7.2, 1.55))
+    w = 0.38
+    for k, (key, label, color) in enumerate(series):
+        xs = [i + (k - 0.5) * w for i in range(n)]
+        ax.bar(xs, ratios[key], width=w, color=color, label=label)
+        for x, r in zip(xs, ratios[key]):
+            ax.text(x, r + 0.06, f"{r:.2f}", ha="center", va="bottom",
+                    fontsize=5.6, color=color, fontweight="bold",
+                    rotation=90)
+    ax.axhline(1.0, color=C_UNSAFE, lw=0.8, ls="--", zorder=0)
+    ax.text(-0.55, 1.05, "SPDK = 1", ha="left", va="bottom",
+            fontsize=6, color=C_UNSAFE)
+    ax.axvline(n - 1.5, color="#999999", lw=0.6, ls=":")
+    top = max(max(v) for v in ratios.values())
+    ax.set_ylim(0, top * 1.45)
+    ax.set_ylabel("slowdown vs. SPDK\n(lower is better)")
+    ax.set_xticks(range(n))
+    ax.set_xticklabels(labels, fontsize=6.5)
+    ax.set_xlim(-0.6, n - 0.4)
+    ax.legend(frameon=False, ncol=2, loc="upper center",
+              bbox_to_anchor=(0.5, 1.2), fontsize=6.5, columnspacing=1.0,
+              handlelength=1.4)
+    fig.tight_layout(pad=0.4)
+    fig.savefig(os.path.join(HERE, "tpch_slowdown_sf1.pdf"))
+    plt.close(fig)
+    print("tpch slowdown geomean:",
+          {k: round(v[-1], 3) for k, v in ratios.items()},
+          "max:", {k: round(max(v[:-1]), 2) for k, v in ratios.items()})
+
 fig_micro()
 if os.path.exists(os.path.join(WS, "nvmepol/results_qd.csv")):
     fig_qd()
 fig_tpch()
+fig_tpch_slowdown()
 print("nvme figures written")
