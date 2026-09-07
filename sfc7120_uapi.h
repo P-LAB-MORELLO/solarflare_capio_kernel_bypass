@@ -28,6 +28,14 @@ typedef enum {
     SFC7120_TX_DESC_RING,     /* 3 — TX descriptor ring (4 KB) */
     SFC7120_RX_DESC_RING,     /* 4 — RX descriptor ring (4 KB) */
     SFC7120_EVQ_RING,         /* 5 — data EVQ ring, instance 1 (4 KB) */
+    /*
+     * 6 — ABLATION ONLY. The whole BAR2 as one unsliced capability, used by
+     * userlib/capio_ablation.c to measure slicing overhead (sliced vs wide
+     * cap over the same registers). Exists only when the module is loaded
+     * with kenv hw.sfc7120pol.ablation=1; otherwise the region has length 0
+     * and is marked mapped, so every map attempt is refused.
+     */
+    SFC7120_MMIO_REGION_UNSLICED,
     SFC7120_REGION_COUNT
 } sfc7120_vm_map_type_t;
 

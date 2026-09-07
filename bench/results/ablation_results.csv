@@ -1,0 +1,7 @@
+device,region,mode,n_slices,iters,reps,unsliced_ns,sliced_ns,delta_ns,delta_pct
+Solarflare SFN7322F-R2,BAR2 MMIO (doorbells + HW_REV_ID),indep,5,1000000,5,141.425,141.576,+0.150,+0.11
+Solarflare SFN7322F-R2,BAR2 MMIO (doorbells + HW_REV_ID),chain,5,1000000,5,692.857,692.945,+0.087,+0.01
+NVMe Sandisk Optimus 5100,BAR0 MMIO (IO SQ/CQ doorbells),indep,2,1000000,5,76.777,76.764,-0.012,-0.02
+NVMe Sandisk Optimus 5100,BAR0 MMIO (IO SQ/CQ doorbells),chain,2,1000000,5,948.788,948.794,+0.007,+0.00
+NVMe Sandisk Optimus 5100,IO SQ ring (non-cacheable host RAM; CDW0 + CDW10-15 windows),indep,256,1000000,5,10.536,10.726,+0.190,+1.80
+NVMe Sandisk Optimus 5100,IO SQ ring (non-cacheable host RAM; CDW0 + CDW10-15 windows),chain,256,1000000,5,115.259,115.572,+0.314,+0.27

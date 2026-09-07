@@ -138,3 +138,36 @@ ceiling for rawB, and never let a ladder keep running after an rx=0 row.
 | rawB_capio_fc0       | CAPIO 64B/256B, flow control OFF, 30 s                       | 64B ceiling only |
 | rawB_capio_fc0b      | CAPIO 512B, flow control OFF, 30 s; wedged at 50%            | diagnostic |
 | rawB_capio_ctl_fc3   | CAPIO 512B, flow control default, rebuilt stub; clean        | control |
+
+## Slicing overhead ablation (Solarflare and NVMe)
+
+Same experiment as the paper's e1000e / ConnectX-4 rows (Table "Zero-Cost
+Safety on the I/O Path"): random 4-byte reads through CAPIO per-register
+slices versus one wide capability over the same bytes. Tool:
+`userlib/capio_ablation.c`, results in `results/ablation_results.csv`
+(measured 2026-09-07 on Morello, 1M reads x 5 reps per path).
+
+Each stub grows an ablation-only unsliced twin of its sliced region, present
+only when the module is loaded with a kenv (`hw.sfc7120pol.ablation=1`,
+`hw.nvmepol.ablation=1`). Never set these for real workloads: they hand
+userspace the whole BAR (and, for NVMe, PRP1).
+
+Two loop shapes are reported. `indep` is the loop the paper's earlier rows
+used: consecutive loads are independent, so the core overlaps device reads
+and the number is closer to a throughput figure (Solarflare: 141 ns).
+`chain` makes each load's address depend on the previous load's value, so
+it is the true per-access latency (Solarflare: 693 ns). Slicing costs
+nothing in either: every delta is below 0.4 ns.
+
+| Hierarchy | Baseline (ns, chain) | Delta (ns) | Delta % |
+|---|---|---|---|
+| Solarflare MMIO (doorbells) | 692.86 | +0.09 | +0.01 |
+| NVMe MMIO (doorbells) | 948.79 | +0.01 | +0.00 |
+| NVMe SQ entry (non-cacheable host RAM) | 115.26 | +0.31 | +0.27 |
+
+Run:
+
+    kenv hw.sfc7120pol.ablation=1; kldload sfc7120pol.ko
+    ./capio_ablation /dev/sfc7120pol0 2:6
+    kenv hw.nvmepol.ablation=1; kldload nvmepol.ko; devctl set driver -f pci0:5:0:0 nvmepol; devctl attach pci0:5:0:0
+    ./capio_ablation /dev/nvmepol 0:4 1:5

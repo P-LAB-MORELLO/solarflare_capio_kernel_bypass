@@ -126,6 +126,9 @@ sfc7120_get_buffer_size(void *arg, int type)
         buffer_size = rman_get_size(sc->mem_resource);
         SFC7120_UNLOCK(sc);
         return buffer_size;
+    case SFC7120_MMIO_REGION_UNSLICED:
+        /* 0 unless hw.sfc7120pol.ablation=1 was set at load (see attach). */
+        return sc->smem[SFC7120_MMIO_REGION_UNSLICED].len;
     case SFC7120_TX_DESC_RING:
         return SFC7120_NUM_TX_DESC * SFC7120_TX_DESC_SIZE;
     case SFC7120_RX_DESC_RING:
@@ -786,6 +789,32 @@ sfc7120_fbsd_attach(device_t dev)
     sc->smem[SFC7120_EVQ_RING].len         =
         SFC7120_NUM_EVQ_ENTRY * SFC7120_EVQ_ENTRY_SIZE;
     sc->smem[SFC7120_EVQ_RING].is_sliced   = false;
+
+    /* Ablation-only unsliced view of BAR2 (same physical range as
+     * SFC7120_MMIO_REGION, no slice manifest). Off by default: the region
+     * is left at length 0 and pre-marked mapped so capio_mmap refuses it.
+     * Enable with `kenv hw.sfc7120pol.ablation=1` before kldload, for
+     * userlib/capio_ablation.c only. Never enable this for real workloads:
+     * it hands userspace every register on the BAR. */
+    {
+        int ablation = 0;
+        TUNABLE_INT_FETCH("hw.sfc7120pol.ablation", &ablation);
+        sc->smem[SFC7120_MMIO_REGION_UNSLICED].type        = SFC7120_MMIO_REGION_UNSLICED;
+        sc->smem[SFC7120_MMIO_REGION_UNSLICED].is_physical = true;
+        sc->smem[SFC7120_MMIO_REGION_UNSLICED].paddr       = rman_get_start(sc->mem_resource);
+        sc->smem[SFC7120_MMIO_REGION_UNSLICED].is_sliced   = false;
+        sc->smem[SFC7120_MMIO_REGION_UNSLICED].slice_definitions = NULL;
+        sc->smem[SFC7120_MMIO_REGION_UNSLICED].slice_def_len     = 0;
+        if (ablation) {
+            sc->smem[SFC7120_MMIO_REGION_UNSLICED].len    = rman_get_size(sc->mem_resource);
+            sc->smem[SFC7120_MMIO_REGION_UNSLICED].mapped = false;
+            device_printf(dev, "ABLATION: unsliced BAR2 region enabled "
+                          "(hw.sfc7120pol.ablation=1); unsafe, benchmark only\n");
+        } else {
+            sc->smem[SFC7120_MMIO_REGION_UNSLICED].len    = 0;
+            sc->smem[SFC7120_MMIO_REGION_UNSLICED].mapped = true;
+        }
+    }
 
     device_printf(dev, "TRACE: smem populated\n");
 
