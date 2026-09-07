@@ -191,9 +191,8 @@ def fig_tpch_slowdown():
             ax.text(x, r + 0.06, f"{r:.2f}", ha="center", va="bottom",
                     fontsize=5.6, color=color, fontweight="bold",
                     rotation=90)
-    ax.axhline(1.0, color=C_UNSAFE, lw=0.8, ls="--", zorder=0)
-    ax.text(-0.55, 1.05, "SPDK = 1", ha="left", va="bottom",
-            fontsize=6, color=C_UNSAFE)
+    ax.axhline(1.0, color=C_UNSAFE, lw=0.8, ls="--", zorder=0,
+               label="SPDK (unsafe) = 1")
     ax.axvline(n - 1.5, color="#999999", lw=0.6, ls=":")
     top = max(max(v) for v in ratios.values())
     ax.set_ylim(0, top * 1.45)
@@ -201,7 +200,7 @@ def fig_tpch_slowdown():
     ax.set_xticks(range(n))
     ax.set_xticklabels(labels, fontsize=6.5)
     ax.set_xlim(-0.6, n - 0.4)
-    ax.legend(frameon=False, ncol=2, loc="upper center",
+    ax.legend(frameon=False, ncol=3, loc="upper center",
               bbox_to_anchor=(0.5, 1.2), fontsize=6.5, columnspacing=1.0,
               handlelength=1.4)
     fig.tight_layout(pad=0.4)
