@@ -88,8 +88,8 @@ def fig_nginx():
     w = 0.27
     for off, arm, label, color in (
             (-w, "fsA", "F-Stack/DPDK (unsafe)", C_DPDK),
-            (0.0, "fsB", "F-Stack/CAPIO", C_CAPIO),
-            (w, "fsBrev", "F-Stack/CAPIO+revoke", C_REVOKE)):
+            (0.0, "fsB", "F-Stack/CAPIO (safe)", C_CAPIO),
+            (w, "fsBrev", "F-Stack/CAPIO+revoke (safe)", C_REVOKE)):
         xs = [i + off for i in range(len(cells))]
         ys = [rows[c].get(arm, 0) for c in cells]
         ax.bar(xs, ys, width=w, color=color, label=label)
@@ -99,7 +99,8 @@ def fig_nginx():
     ax.set_xticklabels(labels, rotation=40, ha="right", fontsize=6)
     h, l = ax.get_legend_handles_labels()
     fig.legend(h, l, frameon=False, ncol=3, loc="upper center",
-               bbox_to_anchor=(0.54, 1.03), fontsize=6, columnspacing=0.8)
+               bbox_to_anchor=(0.5, 1.03), fontsize=6, columnspacing=0.6,
+               handlelength=1.2, handletextpad=0.4)
     fig.tight_layout(pad=0.4, rect=(0, 0, 1, 0.92))
     fig.savefig(os.path.join(HERE, "sfc_nginx.pdf"))
     plt.close(fig)
@@ -125,8 +126,8 @@ def fig_redis():
     fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(3.6, 1.7),
                                    gridspec_kw={"width_ratios": [2, 3]})
     arms = (("fsA", "F-Stack/DPDK (unsafe)", C_DPDK),
-            ("fsB", "F-Stack/CAPIO", C_CAPIO),
-            ("fsBrev", "F-Stack/CAPIO+revoke", C_REVOKE))
+            ("fsB", "F-Stack/CAPIO (safe)", C_CAPIO),
+            ("fsBrev", "F-Stack/CAPIO+revoke (safe)", C_REVOKE))
     wls = ["a", "b", "c", "d", "f"]
     w = 0.27
     for k, (arm, label, color) in enumerate(arms):
@@ -148,7 +149,8 @@ def fig_redis():
     ax2.set_title("memtier_benchmark", pad=2)
     h, l = ax1.get_legend_handles_labels()
     fig.legend(h, l, frameon=False, ncol=3, loc="upper center",
-               bbox_to_anchor=(0.54, 1.03), fontsize=6, columnspacing=0.8)
+               bbox_to_anchor=(0.5, 1.03), fontsize=6, columnspacing=0.6,
+               handlelength=1.2, handletextpad=0.4)
     fig.tight_layout(pad=0.4, rect=(0, 0, 1, 0.90))
     fig.savefig(os.path.join(HERE, "sfc_redis.pdf"))
     plt.close(fig)
@@ -162,10 +164,10 @@ print("figures written")
 # net.inet.udp.recvspace=2MB after diagnosing the default 42KB buffer as
 # the source of the 1514B loss step (see paper text / bench/REPRODUCE.md).
 ARMS5 = (("rawA_dpdk", "DPDK raw (unsafe)", "#444444", "o", "-"),
-         ("rawB_capio", "CAPIO raw", "#2a9d8f", "s", "-"),
+         ("rawB_capio", "CAPIO raw (safe)", "#2a9d8f", "s", "-"),
          ("fsA_bigbuf", "F-Stack/DPDK (unsafe)", C_DPDK, "o", "--"),
-         ("fsB_bigbuf", "F-Stack/CAPIO", C_CAPIO, "s", "--"),
-         ("fsBrev_bigbuf", "F-Stack/CAPIO+revoke", C_REVOKE, "^", "--"))
+         ("fsB_bigbuf", "F-Stack/CAPIO (safe)", C_CAPIO, "s", "--"),
+         ("fsBrev_bigbuf", "F-Stack/CAPIO+revoke (safe)", C_REVOKE, "^", "--"))
 SIZES = [64, 128, 256, 512, 1024, 1280, 1514]
 
 def _grid():

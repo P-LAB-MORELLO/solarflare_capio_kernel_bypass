@@ -41,8 +41,8 @@ def fig_micro():
             rows[(r["config"], r["operation"])] = r
     configs = (("SPDK-bypass", "SPDK (unsafe)", C_UNSAFE),
                ("kernel-nvme4", "kernel nvme(4)", C_KERNEL),
-               ("CAPIO-unsliced", "CAPIO unsliced", C_UNSL),
-               ("CAPIO-sliced", "CAPIO sliced", C_CAPIO))
+               ("CAPIO-unsliced", "CAPIO unsliced (ablation)", C_UNSL),
+               ("CAPIO-sliced", "CAPIO sliced (safe)", C_CAPIO))
     panels = (("mean latency (µs)", lambda r: float(r["mean_us"])),
               ("p99 latency (µs)", lambda r: float(r["p99_us"])),
               ("IOPS (thousands)", lambda r: float(r["iops"]) / 1e3))
@@ -83,8 +83,8 @@ def fig_qd():
             rows[(r["config"], r["operation"], int(r["qd"]))] = r
     configs = (("SPDK-bypass", "SPDK (unsafe)", C_UNSAFE),
                ("kernel-nvme4", "kernel nvme(4)", C_KERNEL),
-               ("CAPIO-unsliced", "CAPIO unsliced", C_UNSL),
-               ("CAPIO-sliced", "CAPIO sliced", C_CAPIO))
+               ("CAPIO-unsliced", "CAPIO unsliced (ablation)", C_UNSL),
+               ("CAPIO-sliced", "CAPIO sliced (safe)", C_CAPIO))
     qds = sorted({k[2] for k in rows})
     ops = (("randread", "read"), ("randwrite", "write"))
     fig, axes = plt.subplots(2, 3, figsize=(7.2, 4.4), sharex=True)
@@ -131,7 +131,7 @@ def fig_tpch():
                 data.setdefault(r["backend"], {})[r["name"]] = \
                     float(r["wall_s"])
     backends = (("spdk", "SPDK (unsafe)", C_UNSAFE),
-                ("capio", "CAPIO", C_CAPIO),
+                ("capio", "CAPIO (safe)", C_CAPIO),
                 ("unix_direct", "kernel FS (O_DIRECT)", C_KERNEL))
     # q13/q14/q22 need SQL dialect features SQLite lacks and fail on every
     # backend; exclude them as the text describes.
